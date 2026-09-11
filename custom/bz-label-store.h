@@ -52,6 +52,24 @@ bz_label_store_set_core_label (BzLabelStore *store,
                                GError      **error);
 
 gboolean
+bz_label_store_get_app_review (BzLabelStore *store,
+                               const char   *app_id,
+                               char        **aesthetics,
+                               char        **usability,
+                               char        **features,
+                               char        **issues,
+                               GError      **error);
+
+gboolean
+bz_label_store_set_app_review (BzLabelStore *store,
+                               const char   *app_id,
+                               const char   *aesthetics,
+                               const char   *usability,
+                               const char   *features,
+                               const char   *issues,
+                               GError      **error);
+
+gboolean
 bz_label_store_has_noncore_label (BzLabelStore *store,
                                   const char   *app_id,
                                   const char   *label);

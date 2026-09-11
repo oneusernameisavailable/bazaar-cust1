@@ -182,11 +182,17 @@ init_schema (BzLabelStore *store,
       "  label  TEXT NOT NULL,"
       "  PRIMARY KEY (app_id, label)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS label_names ("
-      "  name TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID;";
+      "  name TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS app_ratings ("
+      "  app_id     TEXT PRIMARY KEY NOT NULL,"
+      "  aesthetics TEXT NOT NULL DEFAULT '',"
+      "  usability  TEXT NOT NULL DEFAULT '',"
+      "  features   TEXT NOT NULL DEFAULT '',"
+      "  issues     TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
 
   if (!exec_ok (store, schema, error))
     return FALSE;
-  return exec_ok (store, "PRAGMA user_version=1;", error);
+  return exec_ok (store, "PRAGMA user_version=2;", error);
 }
 
 static void
@@ -1069,6 +1075,131 @@ bz_label_store_set_core_label (BzLabelStore *store,
     }
 
   return tx_finish (store, TRUE, error);
+}
+
+gboolean
+bz_label_store_get_app_review (BzLabelStore *store,
+                               const char   *app_id,
+                               char        **aesthetics,
+                               char        **usability,
+                               char        **features,
+                               char        **issues,
+                               GError      **error)
+{
+  sqlite3_stmt        *stmt   = NULL;
+  const unsigned char *t;
+  int                  rc;
+  gboolean             found  = FALSE;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, FALSE);
+  g_return_val_if_fail (app_id != NULL, FALSE);
+
+  if (aesthetics != NULL)
+    *aesthetics = NULL;
+  if (usability != NULL)
+    *usability = NULL;
+  if (features != NULL)
+    *features = NULL;
+  if (issues != NULL)
+    *issues = NULL;
+
+  rc = sqlite3_prepare_v2 (store->db,
+                           "SELECT aesthetics, usability, features, issues "
+                           "FROM app_ratings WHERE app_id=?1;",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    return set_error (store->db, rc, "prepare review select", error);
+
+  sqlite3_bind_text (stmt, 1, app_id, -1, SQLITE_STATIC);
+  if (sqlite3_step (stmt) == SQLITE_ROW)
+    {
+      found = TRUE;
+      t = sqlite3_column_text (stmt, 0);
+      if (aesthetics != NULL && t != NULL)
+        *aesthetics = g_strdup ((const char *) t);
+      t = sqlite3_column_text (stmt, 1);
+      if (usability != NULL && t != NULL)
+        *usability = g_strdup ((const char *) t);
+      t = sqlite3_column_text (stmt, 2);
+      if (features != NULL && t != NULL)
+        *features = g_strdup ((const char *) t);
+      t = sqlite3_column_text (stmt, 3);
+      if (issues != NULL && t != NULL)
+        *issues = g_strdup ((const char *) t);
+    }
+  sqlite3_finalize (stmt);
+
+  return found;
+}
+
+gboolean
+bz_label_store_set_app_review (BzLabelStore *store,
+                               const char   *app_id,
+                               const char   *aesthetics,
+                               const char   *usability,
+                               const char   *features,
+                               const char   *issues,
+                               GError      **error)
+{
+  sqlite3_stmt *stmt = NULL;
+  const char   *aes;
+  const char   *usa;
+  const char   *fea;
+  const char   *iss;
+  const char   *sql;
+  int           rc;
+  gboolean      ok;
+  gboolean      empty;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, FALSE);
+  g_return_val_if_fail (app_id != NULL, FALSE);
+
+  aes = aesthetics != NULL ? aesthetics : "";
+  usa = usability != NULL ? usability : "";
+  fea = features != NULL ? features : "";
+  iss = issues != NULL ? issues : "";
+
+  empty = (aes[0] == '\0' && usa[0] == '\0' &&
+           fea[0] == '\0' && iss[0] == '\0');
+
+  if (!tx_begin (store, error))
+    return FALSE;
+
+  if (empty)
+    sql = "DELETE FROM app_ratings WHERE app_id=?1;";
+  else
+    sql = "INSERT INTO app_ratings(app_id,aesthetics,usability,features,issues) "
+          "VALUES(?1,?2,?3,?4,?5) "
+          "ON CONFLICT(app_id) DO UPDATE SET "
+          "aesthetics=excluded.aesthetics, usability=excluded.usability, "
+          "features=excluded.features, issues=excluded.issues;";
+
+  rc = sqlite3_prepare_v2 (store->db, sql, -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    {
+      set_error (store->db, rc, "prepare review upsert", error);
+      tx_abort (store);
+      return FALSE;
+    }
+
+  sqlite3_bind_text (stmt, 1, app_id, -1, SQLITE_STATIC);
+  if (!empty)
+    {
+      sqlite3_bind_text (stmt, 2, aes, -1, SQLITE_STATIC);
+      sqlite3_bind_text (stmt, 3, usa, -1, SQLITE_STATIC);
+      sqlite3_bind_text (stmt, 4, fea, -1, SQLITE_STATIC);
+      sqlite3_bind_text (stmt, 5, iss, -1, SQLITE_STATIC);
+    }
+  ok = step_stmt (store, stmt, error);
+  sqlite3_finalize (stmt);
+
+  if (!ok)
+    {
+      tx_abort (store);
+      return FALSE;
+    }
+
+  return tx_finish (store, sqlite3_changes (store->db) > 0, error);
 }
 
 gboolean
