@@ -171,6 +171,7 @@ bz_sources = files(
   'bz-world-map.c',
   'bz-yaml-parser.c',
   'bz-zoom.c',
+  'cz-app-report.c',
   'cz-custom-page.c',
   'cz-custom-filter.c',
   'cz-custom-label-store.c',
@@ -433,6 +434,16 @@ test_cz_custom_label_store_exe = executable('test-cz-custom-label-store',
 test('cz-custom-label-store', test_cz_custom_label_store_exe,
   protocol: 'exitcode',
   env: ['G_TEST_OPTION_DEFAULTS=1', 'GSETTINGS_BACKEND=memory'],
+  timeout: 120,
+)
+
+test_cz_app_report_exe = executable('test-cz-app-report',
+  'test-cz-app-report.c',
+  dependencies: bz_dep,
+)
+test('cz-app-report', test_cz_app_report_exe,
+  protocol: 'exitcode',
+  env: ['G_TEST_OPTION_DEFAULTS=1', 'GSETTINGS_BACKEND=memory', 'GTK_A11Y=test'],
   timeout: 120,
 )
 
