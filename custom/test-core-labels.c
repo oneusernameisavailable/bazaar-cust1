@@ -255,8 +255,8 @@ find_menu_button (GtkWidget *widget)
     return NULL;
   if (GTK_IS_MENU_BUTTON (widget))
     {
-      const char *icon = gtk_menu_button_get_icon_name (GTK_MENU_BUTTON (widget));
-      if (g_strcmp0 (icon, "open-menu-symbolic") == 0)
+      const char *tooltip = gtk_widget_get_tooltip_text (widget);
+      if (g_strcmp0 (tooltip, "App Label") == 0)
         return widget;
     }
 
@@ -1366,8 +1366,8 @@ find_noncore_menu_button (GtkWidget *widget)
     return NULL;
   if (GTK_IS_MENU_BUTTON (widget))
     {
-      const char *icon = gtk_menu_button_get_icon_name (GTK_MENU_BUTTON (widget));
-      if (g_strcmp0 (icon, "open-menu-symbolic") == 0)
+      const char *tooltip = gtk_widget_get_tooltip_text (widget);
+      if (g_strcmp0 (tooltip, "Non-Core Label") == 0)
         found = widget;
     }
 
@@ -1872,6 +1872,221 @@ test_filter_restore_on_back (void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Review popover                                                     */
+/* ------------------------------------------------------------------ */
+
+static GtkWidget *
+find_widget_by_data (GtkWidget   *widget,
+                     const char  *key)
+{
+  GtkWidget *child;
+
+  if (widget == NULL)
+    return NULL;
+
+  if (g_object_get_data (G_OBJECT (widget), key) != NULL)
+    return widget;
+
+  child = gtk_widget_get_first_child (widget);
+  while (child != NULL)
+    {
+      GtkWidget *found = find_widget_by_data (child, key);
+      if (found != NULL)
+        return found;
+      child = gtk_widget_get_next_sibling (child);
+    }
+  return NULL;
+}
+
+static gboolean
+is_text_view_widget (GtkWidget *widget)
+{
+  return GTK_IS_TEXT_VIEW (widget);
+}
+
+static gboolean
+is_label_widget (GtkWidget *widget)
+{
+  return GTK_IS_LABEL (widget);
+}
+
+static void
+collect_widget_tree (GtkWidget                   *widget,
+                     gboolean   (*predicate) (GtkWidget *),
+                     GPtrArray  *out)
+{
+  GtkWidget *child;
+
+  if (widget == NULL)
+    return;
+
+  if (predicate (widget))
+    g_ptr_array_add (out, widget);
+
+  child = gtk_widget_get_first_child (widget);
+  while (child != NULL)
+    {
+      collect_widget_tree (child, predicate, out);
+      child = gtk_widget_get_next_sibling (child);
+    }
+}
+
+static GtkLabel *
+find_label_in_array (GPtrArray  *labels,
+                     const char *text)
+{
+  guint i;
+
+  for (i = 0; i < labels->len; i++)
+    {
+      GtkWidget   *lbl = g_ptr_array_index (labels, i);
+      const char  *t = gtk_label_get_text (GTK_LABEL (lbl));
+      if (g_strcmp0 (t, text) == 0)
+        return GTK_LABEL (lbl);
+    }
+  return NULL;
+}
+
+/* Run the 500ms debounce timeout so set_app_review actually writes. */
+static void
+wait_for_review_save (void)
+{
+  GMainContext *ctx = g_main_context_default ();
+
+  g_usleep (700 * 1000);
+  while (g_main_context_pending (ctx))
+    g_main_context_iteration (ctx, FALSE);
+}
+
+static void
+test_review_popover (void)
+{
+  BzFullView     *full_view;
+  BzEntryGroup   *group;
+  GtkWidget      *win;
+  GtkWidget      *review_btn;
+  GtkPopover     *popover;
+  GtkWidget      *child;
+  GtkWidget      *review_item;
+  GPtrArray      *views;
+  GPtrArray      *labels;
+  GtkTextBuffer  *buf[4];
+  BzLabelStore   *store;
+  gboolean        found;
+  g_autofree char *aes = NULL, *usa = NULL, *fea = NULL, *iss = NULL;
+  int             i;
+  GtkTextIter     start, end;
+  g_autofree char *txt = NULL;
+  const char     *expected[4];
+
+  wipe_store ();
+  store = open_store ();
+  bz_label_store_set_app_review (store, "org.test.App1",
+                                 "Good UI", "Fast", "", "No bugs", NULL);
+  bz_label_store_close (store);
+
+  full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
+  g_assert_nonnull (full_view);
+  win = host_full_view (full_view);
+
+  group = make_entry_group ("org.test.App1");
+  bz_full_view_set_entry_group (full_view, group);
+  g_object_unref (group);
+
+  review_btn = find_widget_by_data (GTK_WIDGET (full_view), "review-button");
+  g_assert_nonnull (review_btn);
+  popover = gtk_menu_button_get_popover (GTK_MENU_BUTTON (review_btn));
+  g_assert_nonnull (popover);
+
+  /* Menu view: single labelled item */
+  child = gtk_popover_get_child (popover);
+  g_assert_nonnull (child);
+  review_item = find_widget_by_data (child, "review-item");
+  g_assert_nonnull (review_item);
+  g_test_message ("DIAG:review-popover | menu-item=%s",
+                  G_OBJECT_TYPE_NAME (review_item));
+
+  views = g_ptr_array_new ();
+  collect_widget_tree (child, is_text_view_widget, views);
+  g_assert_cmpuint (views->len, ==, 0);
+
+  /* Activate "Review" → form with 4 fields */
+  g_signal_emit_by_name (review_item, "clicked");
+  child = gtk_popover_get_child (popover);
+  g_assert_nonnull (child);
+
+  g_ptr_array_set_size (views, 0);
+  collect_widget_tree (child, is_text_view_widget, views);
+  g_assert_cmpuint (views->len, ==, 4);
+  g_test_message ("DIAG:review-popover | views=%u", views->len);
+
+  labels = g_ptr_array_new ();
+  collect_widget_tree (child, is_label_widget, labels);
+  g_assert_nonnull (find_label_in_array (labels, "Aesthetics"));
+  g_assert_nonnull (find_label_in_array (labels, "Usability"));
+  g_assert_nonnull (find_label_in_array (labels, "Features"));
+  g_assert_nonnull (find_label_in_array (labels, "Issues"));
+
+  expected[0] = "Good UI";
+  expected[1] = "Fast";
+  expected[2] = "";
+  expected[3] = "No bugs";
+  for (i = 0; i < 4; i++)
+    {
+      GtkTextBuffer *b = gtk_text_view_get_buffer (
+          GTK_TEXT_VIEW (g_ptr_array_index (views, i)));
+
+      buf[i] = b;
+      gtk_text_buffer_get_start_iter (b, &start);
+      gtk_text_buffer_get_end_iter (b, &end);
+      g_free (txt);
+      txt = gtk_text_buffer_get_text (b, &start, &end, FALSE);
+      g_test_message ("DIAG:review-popover | field[%d]='%s'", i, txt);
+      g_assert_cmpstr (txt, ==, expected[i]);
+    }
+
+  /* Edit two fields and confirm the debounce persists the change. */
+  gtk_text_buffer_set_text (buf[0], "Slick UI", -1);
+  gtk_text_buffer_set_text (buf[2], "Tabs", -1);
+  wait_for_review_save ();
+
+  store = open_store ();
+  found = bz_label_store_get_app_review (store, "org.test.App1",
+                                         &aes, &usa, &fea, &iss, NULL);
+  g_assert_true (found);
+  g_assert_cmpstr (aes, ==, "Slick UI");
+  g_assert_cmpstr (usa, ==, "Fast");
+  g_assert_cmpstr (fea, ==, "Tabs");
+  g_assert_cmpstr (iss, ==, "No bugs");
+  g_clear_pointer (&aes, g_free);
+  g_clear_pointer (&usa, g_free);
+  g_clear_pointer (&fea, g_free);
+  g_clear_pointer (&iss, g_free);
+
+  /* Clear every field → the row is deleted, not left empty */
+  gtk_text_buffer_set_text (buf[0], "", -1);
+  gtk_text_buffer_set_text (buf[1], "", -1);
+  gtk_text_buffer_set_text (buf[2], "", -1);
+  gtk_text_buffer_set_text (buf[3], "", -1);
+  wait_for_review_save ();
+
+  found = bz_label_store_get_app_review (store, "org.test.App1",
+                                         &aes, &usa, &fea, &iss, NULL);
+  g_assert_false (found);
+  g_clear_pointer (&aes, g_free);
+  g_clear_pointer (&usa, g_free);
+  g_clear_pointer (&fea, g_free);
+  g_clear_pointer (&iss, g_free);
+  bz_label_store_close (store);
+
+  g_ptr_array_unref (views);
+  g_ptr_array_unref (labels);
+  g_object_ref_sink (full_view);
+  gtk_window_destroy (GTK_WINDOW (win));
+  g_clear_object (&full_view);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1946,6 +2161,9 @@ main (int argc, char *argv[])
                      test_noncore_pills_on_custom_page);
   g_test_add_func ("/core-labels/filter-restore-on-back",
                      test_filter_restore_on_back);
+
+  g_test_add_func ("/core-labels/review-popover",
+                     test_review_popover);
 
   ret = g_test_run ();
 

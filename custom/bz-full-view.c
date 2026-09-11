@@ -78,6 +78,7 @@ struct _BzFullView
   GtkToggleButton   *description_toggle;
   GtkMenuButton     *core_label_button;
   GtkMenuButton     *noncore_label_button;
+  GtkMenuButton     *review_button;
 
 /* Core labels (shared with custom companion app) */
   GHashTable   *core_labels;
@@ -89,6 +90,11 @@ struct _BzFullView
   GHashTable   *custom_labels;        /* app_id -> GPtrArray* of label strings */
   GHashTable   *custom_label_names;   /* set of available custom label names */
   GtkPopover   *custom_label_popover;
+
+  /* Free-form review notes (aesthetics/usability/features/issues) */
+  GtkPopover    *review_popover;
+  GtkTextBuffer *review_buffers[4];
+  guint          review_save_src;      /* pending debounce timeout id, 0 none */
 };
 
 G_DEFINE_FINAL_TYPE (BzFullView, bz_full_view, ADW_TYPE_BIN)
@@ -123,6 +129,7 @@ static void
 bz_full_view_dispose (GObject *object)
 {
   BzFullView *self = BZ_FULL_VIEW (object);
+  guint       i;
 
   dex_clear (&self->ui_future);
   g_clear_object (&self->state);
@@ -153,6 +160,19 @@ bz_full_view_dispose (GObject *object)
     {
       gtk_widget_unparent (GTK_WIDGET (self->custom_label_popover));
       self->custom_label_popover = NULL;
+    }
+
+  if (self->review_save_src != 0)
+    {
+      g_source_remove (self->review_save_src);
+      self->review_save_src = 0;
+    }
+  for (i = 0; i < 4; i++)
+    self->review_buffers[i] = NULL;
+  if (self->review_popover != NULL)
+    {
+      gtk_widget_unparent (GTK_WIDGET (self->review_popover));
+      self->review_popover = NULL;
     }
 
   G_OBJECT_CLASS (bz_full_view_parent_class)->dispose (object);
@@ -1071,10 +1091,13 @@ static void rebuild_custom_label_popover (BzFullView *self)
 
   gtk_popover_set_child (self->custom_label_popover, box);
 }
+static void rebuild_review_popover (BzFullView *self);
+
 static void on_full_view_entry_group_changed (BzFullView *self)
 {
   rebuild_core_label_popover (self);
   rebuild_custom_label_popover (self);
+  rebuild_review_popover (self);
 }
 
 /* Callbacks for label toggles */
@@ -1152,6 +1175,187 @@ static void on_custom_label_toggled (GtkCheckButton *button,
       bz_label_store_remove_noncore_label (self->label_store, app_id, label, NULL);
       gtk_widget_remove_css_class (GTK_WIDGET (button), "suggested-action");
     }
+}
+
+/* Review notes (free-form, one text field per aspect) */
+
+static void
+review_popover_set_form (BzFullView *self);
+
+static gboolean
+review_save_fire (gpointer user_data)
+{
+  BzFullView    *self = user_data;
+  const char    *app_id = NULL;
+  GtkTextIter    start, end;
+  gchar         *texts[4] = { NULL, NULL, NULL, NULL };
+  gboolean       any = FALSE;
+  int            i;
+
+  self->review_save_src = 0;
+  if (self->label_store == NULL || self->group == NULL)
+    return G_SOURCE_REMOVE;
+
+  app_id = bz_entry_group_get_id (self->group);
+  for (i = 0; i < 4; i++)
+    {
+      if (self->review_buffers[i] == NULL)
+        continue;
+      gtk_text_buffer_get_start_iter (self->review_buffers[i], &start);
+      gtk_text_buffer_get_end_iter (self->review_buffers[i], &end);
+      texts[i] = gtk_text_buffer_get_text (self->review_buffers[i],
+                                           &start, &end, FALSE);
+      if (texts[i] == NULL || *texts[i] == '\0')
+        {
+          g_clear_pointer (&texts[i], g_free);
+          texts[i] = NULL;
+        }
+      if (texts[i] != NULL)
+        any = TRUE;
+    }
+
+  if (any)
+    {
+      bz_label_store_set_app_review (self->label_store, app_id,
+                                     texts[0], texts[1], texts[2], texts[3],
+                                     NULL);
+    }
+  else
+    {
+      /* All four fields empty → drop the row so the report shows a blank app */
+      bz_label_store_set_app_review (self->label_store, app_id,
+                                     NULL, NULL, NULL, NULL, NULL);
+    }
+
+  for (i = 0; i < 4; i++)
+    g_free (texts[i]);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+review_save_schedule (BzFullView *self)
+{
+  if (self->review_save_src != 0)
+    g_source_remove (self->review_save_src);
+
+  g_object_ref (self);   /* balanced by the source destroy notify */
+  self->review_save_src = g_timeout_add_full (G_PRIORITY_DEFAULT, 500,
+                                              review_save_fire, self,
+                                              (GDestroyNotify) g_object_unref);
+}
+
+static void
+on_review_field_changed (GtkTextBuffer *buffer,
+                         BzFullView    *self)
+{
+  review_save_schedule (self);
+}
+
+static void
+on_review_item_clicked (GtkButton  *button,
+                        BzFullView *self)
+{
+  review_popover_set_form (self);
+}
+
+static void
+review_popover_set_menu (BzFullView *self)
+{
+  GtkWidget *box = NULL;
+  GtkWidget *item = NULL;
+  GtkWidget *label = NULL;
+
+  gtk_popover_set_child (self->review_popover, NULL);
+
+  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_size_request (box, 200, -1);
+
+  item = gtk_button_new ();
+  gtk_widget_add_css_class (item, "menu-item");
+  g_object_set_data (G_OBJECT (item), "review-item", GINT_TO_POINTER (1));
+  label = gtk_label_new (_("Review"));
+  gtk_widget_set_halign (label, GTK_ALIGN_START);
+  gtk_button_set_child (GTK_BUTTON (item), label);
+  g_signal_connect (item, "clicked",
+                    G_CALLBACK (on_review_item_clicked), self);
+  gtk_box_append (GTK_BOX (box), item);
+
+  gtk_popover_set_child (self->review_popover, box);
+}
+
+static void
+review_popover_set_form (BzFullView *self)
+{
+  static const char *field_names[4] = {
+    N_("Aesthetics"), N_("Usability"), N_("Features"), N_("Issues")
+  };
+  char            *saved[4] = { NULL, NULL, NULL, NULL };
+  const char      *app_id = NULL;
+  GtkWidget       *box = NULL;
+  gboolean         found = FALSE;
+  int              i;
+
+  if (self->group == NULL || self->label_store == NULL)
+    return;
+
+  app_id = bz_entry_group_get_id (self->group);
+  found = bz_label_store_get_app_review (self->label_store, app_id,
+                                         &saved[0], &saved[1],
+                                         &saved[2], &saved[3], NULL);
+  gtk_popover_set_child (self->review_popover, NULL);
+
+  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 10);
+  gtk_widget_set_size_request (box, 420, -1);
+  gtk_widget_set_margin_start (box, 12);
+  gtk_widget_set_margin_end (box, 12);
+  gtk_widget_set_margin_top (box, 12);
+  gtk_widget_set_margin_bottom (box, 12);
+
+  for (i = 0; i < 4; i++)
+    {
+      GtkWidget       *field_label = NULL;
+      GtkWidget       *view = NULL;
+      GtkTextBuffer   *buffer = NULL;
+      GtkScrolledWindow *sw = NULL;
+
+      field_label = gtk_label_new (_(field_names[i]));
+      gtk_widget_set_halign (field_label, GTK_ALIGN_START);
+      gtk_widget_add_css_class (field_label, "heading");
+      gtk_box_append (GTK_BOX (box), field_label);
+
+      view = gtk_text_view_new ();
+      gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (view), GTK_WRAP_WORD_CHAR);
+      gtk_text_view_set_top_margin (GTK_TEXT_VIEW (view), 4);
+      gtk_text_view_set_bottom_margin (GTK_TEXT_VIEW (view), 4);
+      gtk_text_view_set_left_margin (GTK_TEXT_VIEW (view), 6);
+      gtk_text_view_set_right_margin (GTK_TEXT_VIEW (view), 6);
+      buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (view));
+      if (found && saved[i] != NULL && *saved[i] != '\0')
+        gtk_text_buffer_set_text (buffer, saved[i], -1);
+
+      sw = GTK_SCROLLED_WINDOW (gtk_scrolled_window_new ());
+      gtk_scrolled_window_set_policy (sw, GTK_POLICY_AUTOMATIC,
+                                      GTK_POLICY_AUTOMATIC);
+      gtk_scrolled_window_set_has_frame (sw, TRUE);
+      gtk_scrolled_window_set_min_content_height (sw, 130);
+      gtk_scrolled_window_set_child (sw, view);
+      gtk_box_append (GTK_BOX (box), GTK_WIDGET (sw));
+
+      self->review_buffers[i] = buffer;
+      g_signal_connect (buffer, "changed",
+                        G_CALLBACK (on_review_field_changed), self);
+    }
+
+  for (i = 0; i < 4; i++)
+    g_free (saved[i]);
+
+  gtk_popover_set_child (self->review_popover, box);
+}
+
+static void
+rebuild_review_popover (BzFullView *self)
+{
+  review_popover_set_menu (self);
 }
 
 /* Public API */
@@ -1275,6 +1479,7 @@ bz_full_view_class_init (BzFullViewClass *klass)
   gtk_widget_class_bind_template_child (widget_class, BzFullView, description_toggle);
   gtk_widget_class_bind_template_child (widget_class, BzFullView, core_label_button);
   gtk_widget_class_bind_template_child (widget_class, BzFullView, noncore_label_button);
+  gtk_widget_class_bind_template_child (widget_class, BzFullView, review_button);
   gtk_widget_class_bind_template_callback (widget_class, is_scrolled_down);
   gtk_widget_class_bind_template_callback (widget_class, age_rating_cb);
   gtk_widget_class_bind_template_callback (widget_class, format_as_link);
@@ -1366,6 +1571,25 @@ bz_full_view_init (BzFullView *self)
     g_signal_connect_swapped (gesture, "pressed",
                               G_CALLBACK (rebuild_custom_label_popover), self);
     gtk_widget_add_controller (GTK_WIDGET (self->noncore_label_button),
+                               GTK_EVENT_CONTROLLER (gesture));
+  }
+
+  /* Review popover — shows a one-item "Review" menu that expands into
+   * the four free-form note fields. */
+  self->review_popover = GTK_POPOVER (gtk_popover_new ());
+  gtk_menu_button_set_popover (GTK_MENU_BUTTON (self->review_button),
+                               GTK_WIDGET (self->review_popover));
+  g_object_set_data (G_OBJECT (self->review_button), "review-button",
+                     GINT_TO_POINTER (1));
+
+  /* Rebuild popover content before the button opens it (capture phase) */
+  {
+    GtkGesture *gesture = gtk_gesture_click_new ();
+    gtk_event_controller_set_propagation_phase (
+        GTK_EVENT_CONTROLLER (gesture), GTK_PHASE_CAPTURE);
+    g_signal_connect_swapped (gesture, "pressed",
+                              G_CALLBACK (rebuild_review_popover), self);
+    gtk_widget_add_controller (GTK_WIDGET (self->review_button),
                                GTK_EVENT_CONTROLLER (gesture));
   }
 
