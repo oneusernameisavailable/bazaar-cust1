@@ -1,0 +1,65 @@
+CompileFlags:
+  Add:
+    - -std=gnu11
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    - -Werror=address
+    - -Werror=array-bounds
+    - -Werror=empty-body
+    - -Werror=implicit
+    - -Werror=implicit-function-declaration
+    - -Werror=incompatible-pointer-types
+    - -Werror=init-self
+    - -Werror=int-conversion
+    - -Werror=int-to-pointer-cast
+    - -Werror=main
+    - -Werror=misleading-indentation
+    - -Werror=missing-braces
+    - -Werror=missing-include-dirs
+    - -Werror=nonnull
+    - -Werror=overflow
+    - -Werror=parenthesis
+    - -Werror=pointer-arith
+    - -Werror=pointer-to-int-cast
+    - -Werror=redundant-decls
+    - -Werror=return-type
+    - -Werror=sequence-point
+    - -Werror=shadow
+    - -Werror=strict-prototypes
+    - -Werror=trigraphs
+    - -Werror=undef
+    - -Werror=write-strings
+    - -Werror=format-security
+    - -Werror=format=2
+    - -fstack-protector-strong
+  Remove:
+    - -Wno-*
+
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+  Suppress:
+    - unused-includes
+
+Tidy:
+  Checks:
+    - clang-analyzer-*
+    - bugprone-*
+    - performance-*
+    - readability-avoid-const-params-in-decls
+    - readability-delete-null-pointer
+    - readability-deleted-default
+    - readability-else-after-return
+    - readability-redundant-*
+    - readability-simplify-*
+    - readability-static-*
+    - readability-string-compare
+  CheckOptions:
+    bugprone-sizeof-expression: { WarnOnSizeOfConstant: false }
+    readability-identifier-naming: { StructCase: CamelCase }
+
+InlayHints:
+  Enabled: true
+  Parameters: true
+  DeducedTypes: true

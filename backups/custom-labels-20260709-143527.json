@@ -1,0 +1,32 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.altaqwaa.Altaqwaa" : "Discarded",
+    "org.test.Game1" : "New",
+    "org.sil.dictionary-app-builder" : "New",
+    "org.test.T1" : "New",
+    "com.aresvalley.artemis" : "Discarded",
+    "im.bernard.Nostalgia" : "Discarded",
+    "org.test.Trend1" : "New",
+    "systems.fracture.launcher" : "Discarded",
+    "io.github.josephmawa.SpellingBee" : "Discarded",
+    "io.github.lethal_guitar.RigelEngine" : "New",
+    "org.test.Game2" : "New",
+    "dev.mariinkys.StarryDex" : "Discarded",
+    "page.codeberg.dudenix.escritoire" : "Discarded",
+    "pro.saladin.Eeman" : "Discarded",
+    "io.github.meypod.al-quran" : "Discarded",
+    "org.test.Dev1" : "New",
+    "org.test.Trend2" : "New",
+    "org.kde.kongress" : "Discarded",
+    "org.hlwd.sonofman" : "Discarded",
+    "io.itch.nordup.TheGates" : "Discarded",
+    "com.nedrichards.octopusagile" : "Discarded",
+    "org.scilab.Scilab" : "New",
+    "org.test.G1" : "New"
+  },
+  "noncore" : {  },
+  "noncore_label_names" : [
+    "Pedro"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.test.App1" : "New",
+    "org.test.App3" : "New",
+    "org.test.App2" : "New"
+  },
+  "noncore" : {
+    "org.test.App1" : [
+      "TestTag"
+    ]
+  },
+  "noncore_label_names" : [
+    "TestTag"
+  ]
+}

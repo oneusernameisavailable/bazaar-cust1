@@ -1,0 +1,23 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.altaqwaa.Altaqwaa" : "Discarded",
+    "org.sil.dictionary-app-builder" : "New",
+    "org.test.T1" : "New",
+    "com.aresvalley.artemis" : "Discarded",
+    "im.bernard.Nostalgia" : "Discarded",
+    "io.github.lethal_guitar.RigelEngine" : "New",
+    "systems.fracture.launcher" : "Discarded",
+    "io.github.josephmawa.SpellingBee" : "Discarded",
+    "page.codeberg.dudenix.escritoire" : "Discarded",
+    "dev.mariinkys.StarryDex" : "Discarded",
+    "pro.saladin.Eeman" : "Discarded",
+    "io.github.meypod.al-quran" : "Discarded",
+    "org.kde.kongress" : "Discarded",
+    "org.hlwd.sonofman" : "Discarded",
+    "io.itch.nordup.TheGates" : "Discarded",
+    "com.nedrichards.octopusagile" : "Discarded",
+    "org.test.G1" : "New"
+  },
+  "noncore" : {  }
+}

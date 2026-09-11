@@ -1,0 +1,31 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzBannerView: Adw.Bin {
+  hexpand: true;
+  vexpand: false;
+  margin-top: 20;
+
+  child: Box box {
+    hexpand: true;
+    vexpand: false;
+    halign: fill;
+    valign: fill;
+    height-request: bind try {$get_height(template.banner as <$BzCuratedBanner>.height), 250};
+    overflow: hidden;
+    css-name: "banner";
+
+    styles ["card"]
+
+    Picture picture {
+      css-name: "image";
+      hexpand: true;
+      alternative-text: bind template.banner as <$BzCuratedBanner>.image as <$BzCuratedImageInfo>.alt;
+      visible: bind $invert_boolean($is_null(template.banner as <$BzCuratedBanner>.image) as <bool>) as <bool>;
+      paintable: bind $get_image(template.banner as <$BzCuratedBanner>.image) as <$GdkPaintable>;
+      can-shrink: bind template.banner as <$BzCuratedBanner>.image as <$BzCuratedImageInfo>.can-shrink;
+      content-fit: bind template.banner as <$BzCuratedBanner>.image as <$BzCuratedImageInfo>.fit;
+      halign: bind template.banner as <$BzCuratedBanner>.image as <$BzCuratedImageInfo>.halign;
+    }
+  };
+}

@@ -1,0 +1,10 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.sil.dictionary-app-builder" : "Pending",
+    "org.test.G1" : "New",
+    "org.test.T1" : "New",
+    "io.github.lethal_guitar.RigelEngine" : "Pending"
+  },
+  "noncore" : {  }
+}

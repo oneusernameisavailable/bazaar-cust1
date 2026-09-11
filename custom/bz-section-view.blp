@@ -1,0 +1,92 @@
+using Gtk 4.0;
+using Gio 2.0;
+using Adw 1;
+
+template $BzSectionView: Adw.Bin {
+  margin-top: 16;
+  child: Box {
+    hexpand: true;
+    vexpand: true;
+    halign: fill;
+    valign: fill;
+    orientation: vertical;
+    spacing: 4;
+
+    Label {
+      visible: bind $invert_boolean($is_null_string(template.section as <$BzCuratedSection>.title as <string>) as <bool>) as <bool>;
+      label: bind template.section as <$BzCuratedSection>.title as <string>;
+      halign: start;
+      xalign: 0;
+
+      styles [
+        "title-1",
+      ]
+    }
+
+    Box {
+      hexpand: true;
+      vexpand: true;
+      visible: bind $invert_boolean($is_null(template.section as <$BzCuratedSection>.subtitle) as <bool>) as <bool>;
+      margin-bottom: 2;
+      $BgeMarkdownRender subtitle {
+        hexpand: true;
+        vexpand: true;
+        wrap-tables: false;
+        markdown: bind template.section as <$BzCuratedSection>.subtitle as <$BzCuratedMarkdownInfo>.string as <string>;
+      }
+    }
+
+    Box {
+      hexpand: true;
+      vexpand: true;
+      visible: bind $invert_boolean($is_null(template.section as <$BzCuratedSection>.appids) as <bool>) as <bool>;
+      orientation: vertical;
+      spacing: 10;
+      margin-top: 10;
+      margin-bottom: 16;
+
+      $BzDynamicListView list {
+        hexpand: true;
+        scroll: false;
+        column-spacing: 10;
+        noscroll-kind: flow-box;
+        child-type: bind try{$get_child_type(template.section as <$BzCuratedSection>.list-type) as <string>,"BzAppTile"};
+        child-prop: "group";
+        model: SliceListModel slice {
+          model: bind $convert_to_groups( template.section as <$BzCuratedSection>.appids as <$BzCuratedAppidsInfo>.list ) as <Gio.ListModel>;
+          offset: 0;
+          size: bind $get_slice_length(template.section as <$BzCuratedSection>.overflow-count, template.section as <$BzCuratedSection>.enable-bulk-install);
+        };
+      }
+
+      Button  {
+        styles [
+          "pill",
+        ]
+
+        margin-start: 25;
+        margin-end: 25;
+        margin-top: 12;
+        halign: center;
+        visible: bind $show_more_visible(template.section as <$BzCuratedSection>.enable-bulk-install as <bool>, template.section as <$BzCuratedSection>.appids as <$BzCuratedAppidsInfo>.list, template.section as <$BzCuratedSection>.overflow-count);
+        label: _("Show More");
+        clicked => $show_more_clicked(template);
+      }
+
+
+      Button {
+        styles [
+          "pill",
+        ]
+
+        margin-start: 25;
+        margin-end: 25;
+        margin-top: 12;
+        halign: center;
+        visible: bind template.section as <$BzCuratedSection>.enable-bulk-install as <bool>;
+        label: _("Install All");
+        clicked => $install_all_clicked(template);
+      }
+    }
+  };
+}

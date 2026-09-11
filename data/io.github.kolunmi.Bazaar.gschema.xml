@@ -70,5 +70,16 @@
       <summary>Check For Ubuntu</summary>
       <description>Whether to check for and warn about Ubuntu's broken apparmor permissions on startup</description>
     </key>
+    <key name="collection-fetch-size" type="i">
+      <default>500</default>
+      <range min="48" max="5000"/>
+      <summary>Flathub Fetch Size</summary>
+      <description>Number of apps to request per category and collection from Flathub</description>
+    </key>
+    <key name="last-fetch-size" type="i">
+      <default>0</default>
+      <summary>Last Applied Fetch Size</summary>
+      <description>Tracks the fetch size actually used by the last Flathub sync</description>
+    </key>
   </schema>
 </schemalist>

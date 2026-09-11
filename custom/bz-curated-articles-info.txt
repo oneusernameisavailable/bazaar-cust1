@@ -1,0 +1,12 @@
+prefix=bz
+name=curated_articles_info
+parent-prefix=g
+parent-name=object
+author=AUTOGEN
+
+include=<gtk/gtk.h>
+include="bz-curated-article.h"
+
+property=list GListModel G_TYPE_LIST_MODEL object
+property=uri char G_TYPE_STRING string
+property=aspect_ratio float G_TYPE_FLOAT float

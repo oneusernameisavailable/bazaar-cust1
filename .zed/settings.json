@@ -1,0 +1,36 @@
+{
+  "lsp": {
+    "clangd": {
+      "settings": {
+        "arguments": [
+          "--clang-tidy",
+          "--clang-tidy-checks=-*,clang-analyzer-*,bugprone-*,performance-*,readability-avoid-const-params-in-decls,readability-delete-null-pointer,readability-deleted-default,readability-else-after-return,readability-redundant-*,readability-simplify-*,readability-static-*,readability-string-compare",
+          "--enable-config",
+          "--header-insertion=never",
+          "--completion-style=bundled",
+          "--pch-storage=memory",
+          "--limit-results=500",
+          "--limit-references=500",
+        ],
+      },
+    },
+  },
+  "format_on_save": {
+    "language": {
+      "C": true,
+    },
+  },
+  "code_actions_on_format": {
+    "source.fixAll.clangd": true,
+  },
+  "inlay_hints": {
+    "enabled": true,
+    "type_hints": true,
+    "parameter_hints": true,
+    "deduced_type_hints": true,
+  },
+  "show_inline_diagnostics": true,
+  "diagnostics": {
+    "enabled": true,
+  },
+}

@@ -1,0 +1,100 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzCuratedView: Adw.Bin {
+  child: Adw.BreakpointBin {
+    width-request: 360;
+    height-request: 100;
+
+    Adw.Breakpoint {
+      condition ("max-width: 700px")
+
+      setters {
+        content_box.margin-start: 10;
+        content_box.margin-end: 10;
+      }
+    }
+
+    child: Adw.ViewStack stack {
+      enable-transitions: true;
+      transition-duration: 400;
+
+      Adw.ViewStackPage {
+        name: "empty";
+        title: _("Empty");
+
+        child: Adw.StatusPage {
+          icon-name: "star-outline-rounded-symbolic";
+          title: _("No Curation");
+          description: _(
+            "There is no curation information provided on this system. You can still browse apps on Flathub"
+          );
+
+          child: Button {
+            label: _("Browse Flathub");
+            halign: center;
+            clicked => $browse_flathub_cb(template);
+
+            styles [
+              "pill",
+            ]
+          };
+        };
+      }
+
+      Adw.ViewStackPage {
+        name: "offline";
+        title: _("Offline");
+
+        child: Adw.StatusPage {
+          icon-name: "connected-squares-x";
+          title: _("Offline");
+        };
+      }
+
+      Adw.ViewStackPage {
+        name: "content";
+        title: _("Browser");
+
+        child: ScrolledWindow {
+          hscrollbar-policy: never;
+
+          child: Adw.ClampScrollable {
+            maximum-size: 1500;
+            tightening-threshold: 1400;
+
+            child: ListView content_box {
+              css-name: "curated-list-view";
+              overflow: visible;
+
+              model: NoSelection {
+                model: bind template.state as <$BzStateInfo>.curated-provider;
+              };
+
+              margin-start: 30;
+              margin-end: 30;
+              margin-bottom: 50;
+
+              factory: BuilderListItemFactory {
+                template ListItem {
+                  activatable: false;
+                  selectable: false;
+                  focusable: false;
+
+                  child: $BzDynamicListView {
+                    hexpand: true;
+                    scroll: false;
+                    noscroll-kind: list-box;
+                    child-type: "BzRowView";
+                    child-prop: "row";
+                    model: bind template.item as <$BzRootCuratedConfig>.rows;
+                  };
+                }
+              };
+            };
+          };
+        };
+      }
+    };
+  };
+}

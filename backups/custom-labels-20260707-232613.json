@@ -1,0 +1,23 @@
+{
+  "version" : 1,
+  "core" : {
+    "io.github.shonebinu.Glyph" : "Pending",
+    "org.kde.kblackbox" : "Pending",
+    "org.test.T1" : "New",
+    "com.github.varnholt.dynablaster_revenge" : "Pending",
+    "org.lvnauth.LVNAuth" : "Pending",
+    "org.codeblocks.codeblocks" : "Pending",
+    "systems.fracture.launcher" : "Pending",
+    "org.kde.kgoldrunner" : "Pending",
+    "org.kde.konquest" : "Pending",
+    "org.kde.kblocks" : "Pending",
+    "org.v1993.NXDumpClient" : "Pending",
+    "org.kde.khangman" : "Pending",
+    "io.github.lxndr.gswatcher" : "Pending",
+    "io.github.zhrexl.thisweekinmylife" : "Pending",
+    "net.krafting.Playlifin" : "Pending",
+    "org.test.G1" : "New",
+    "org.sil.reading-app-builder" : "Pending"
+  },
+  "noncore" : {  }
+}

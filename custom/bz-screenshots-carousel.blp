@@ -1,0 +1,137 @@
+using Gtk 4.0;
+
+template $BzScreenshotsCarousel: Gtk.Widget {
+  valign: start;
+  accessibility {
+    label: _("Screenshots Carousel");
+  }
+
+  styles [
+    "screenshot-carousel",
+    "frame",
+    "carousel-box",
+  ]
+
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.Overlay {
+    halign: fill;
+
+    child: Gtk.Box {
+      orientation: vertical;
+      halign: fill;
+
+      $BgeCarousel carousel {
+        vexpand: true;
+        hexpand: true;
+        height-request: bind $get_carousel_height(template.compact) as <int>;
+
+        allow-mouse-drag: true;
+        allow-overshoot: true;
+        allow-scroll-wheel: true;
+        allow-raise: bind $invert_boolean(template.compact) as <bool>;
+
+        create-widget => $on_create_widget(template);
+        remove-widget => $on_remove_widget(template);
+
+        model: SingleSelection selection {
+          autoselect: true;
+          model: bind template.model;
+
+          notify::selected => $on_notify_selected(template);
+          notify::model => $on_notify_model(template);
+        };
+      }
+    };
+
+    [overlay]
+    Gtk.Revealer prev_button_revealer {
+      transition-type: crossfade;
+      reveal-child: false;
+      halign: start;
+      valign: center;
+      can-focus: false;
+
+      Gtk.Button prev_button {
+        icon-name: "go-previous-symbolic";
+        valign: center;
+        halign: start;
+        clicked => $on_prev_clicked() swapped;
+
+        styles [
+          "circular",
+          "osd",
+        ]
+      }
+    }
+
+    [overlay]
+    Gtk.Revealer next_button_revealer {
+      transition-type: crossfade;
+      reveal-child: false;
+      halign: end;
+      valign: center;
+      can-focus: false;
+
+      Gtk.Button next_button {
+        icon-name: "go-next-symbolic";
+        valign: center;
+        clicked => $on_next_clicked() swapped;
+
+        styles [
+          "circular",
+          "osd",
+        ]
+      }
+    }
+
+    [overlay]
+    Gtk.Box no_screenshots_overlay {
+      orientation: vertical;
+      halign: center;
+      valign: center;
+      spacing: 12;
+      visible: bind $is_empty(template.model) as <bool>;
+
+      Gtk.Image {
+        icon-name: "image-missing-symbolic";
+        pixel-size: 96;
+        styles [
+          "dim-label",
+        ]
+      }
+      Gtk.Label {
+        label: _("No Screenshots");
+        styles [
+          "dim-label",
+          "title-2",
+        ]
+      }
+    }
+
+    [overlay]
+    Box {
+      styles [
+        "osd-box",
+        "pip-button",
+      ]
+
+      margin-end: 8;
+      margin-bottom: 8;
+      halign: end;
+      valign: end;
+      can-focus: false;
+      visible: bind $not($is_empty(template.model) as <bool>) as <bool>;
+
+      Gtk.Button {
+        icon-name: "pip-out-symbolic";
+        tooltip-text: _("Open Screenshot Viewer");
+        clicked => $on_expand_clicked() swapped;
+
+        styles [
+          "flat",
+        ]
+      }
+    }
+  }
+}

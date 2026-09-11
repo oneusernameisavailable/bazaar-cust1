@@ -1,0 +1,104 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzFavoritesPage: Adw.NavigationPage {
+  title: _("Favorites");
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+
+      [end]
+      Button install_all_button {
+        styles [
+          "flat",
+        ]
+        has-tooltip: true;
+        tooltip-text: _("Install All");
+        icon-name: "list-add-symbolic";
+        sensitive: bind $invert_boolean($is_empty(template.favorites) as <bool>) as <bool>;
+        clicked => $install_all_cb() swapped;
+      }
+    }
+
+    content: Adw.BreakpointBin {
+      width-request: 360;
+      height-request: 100;
+
+      child: Adw.ViewStack stack {
+        enable-transitions: true;
+        transition-duration: 400;
+
+        Adw.ViewStackPage {
+          name: "loading";
+          title: _("Loading");
+          child: Adw.Spinner {
+            halign: fill;
+            valign: center;
+            width-request: 64;
+            height-request: 64;
+            margin-bottom: 18;
+          };
+        }
+
+        Adw.ViewStackPage {
+          name: "empty";
+          title: _("Empty");
+          child: Adw.StatusPage {
+            icon-name: "starred-symbolic";
+            title: _("No Favorites");
+            description: _("Applications you mark as favorite will appear here");
+          };
+        }
+
+        Adw.ViewStackPage {
+          name: "content";
+          title: _("Favorites");
+          child: ScrolledWindow {
+            hscrollbar-policy: never;
+            child: Adw.ClampScrollable {
+              maximum-size: 650;
+              child: ListView list_view {
+                styles [
+                  "navigation-sidebar",
+                  "installed-list-view",
+                  "no-vertical-margin"
+                ]
+                margin-start: 25;
+                margin-end: 25;
+                overflow: visible;
+                model: NoSelection {
+                  model: bind template.model;
+                };
+                factory: BuilderListItemFactory {
+                  template ListItem {
+                    activatable: true;
+                    selectable: false;
+                    focusable: true;
+                    child: Revealer {
+                      reveal-child: true;
+                      overflow: visible;
+                      child: $BzFavoritesTile {
+                        group: bind template.item as <$BzEntryGroup>;
+                        activated => $tile_activated_cb();
+                        unfavorited => $unfavorite_cb();
+                      };
+                    };
+                  }
+                };
+              };
+            };
+          };
+        }
+      };
+
+      Adw.Breakpoint {
+        condition ("max-width: 700px")
+        setters {
+          list_view.margin-start: 8;
+          list_view.margin-end: 8;
+        }
+      }
+    };
+  }
+}

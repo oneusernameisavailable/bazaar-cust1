@@ -1,0 +1,94 @@
+using Gtk 4.0;
+
+template $BzAppTile: Button {
+  preferred-width: 270;
+  styles [
+    "card",
+    "app-tile",
+  ]
+
+  child: Overlay {
+    Box {
+      margin-start: 12;
+      margin-end: 12;
+      margin-top: 12;
+      margin-bottom: 12;
+      orientation: horizontal;
+      spacing: 15;
+      can-focus: false;
+
+      Image {
+        pixel-size: 64;
+        paintable: bind template.group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.icon-paintable;
+
+        styles ["icon-dropshadow"]
+      }
+
+      Box {
+        valign: center;
+        hexpand: true;
+        orientation: vertical;
+        spacing: 4;
+
+        Box {
+          orientation: horizontal;
+          spacing: 6;
+
+          Label {
+            css-name: "app-tile-title";
+            styles [
+              "heading",
+            ]
+
+            xalign: 0.0;
+            ellipsize: end;
+            label: bind template.group as <$BzEntryGroup>.title;
+          }
+
+          Image {
+            css-name: "app-tile-verified-check";
+            styles [
+              "verified",
+            ]
+            visible: bind template.group as <$BzEntryGroup>.is-verified;
+            icon-name: "verified-checkmark-symbolic";
+            pixel-size: 14;
+            accessibility {
+              label: _("Verified");
+            }
+          }
+        }
+
+        Label {
+          css-name: "app-tile-description";
+          xalign: 0.0;
+          yalign: 0.0;
+          wrap: true;
+          ellipsize: end;
+          vexpand: true;
+          lines: bind $description_line_amount($is_zero(template.group as <$BzEntryGroup>.removable) as <bool>) as <int>;
+          single-line-mode: true;
+          label: bind template.group as <$BzEntryGroup>.description;
+        }
+
+        Box {
+          css-name: "app-tile-installed-pill";
+          halign: start;
+          spacing: 4;
+          visible: bind $invert_boolean($is_zero(template.group as <$BzEntryGroup>.removable) as <bool>) as <bool>;
+          styles ["small-pill", "installed-pill"]
+
+          Image {
+            icon-name: "app-installed-symbolic";
+            pixel-size: 12;
+          }
+
+          Label {
+            // Translators: As in 'The app is installed'.
+            label: _("Installed");
+          }
+        }
+      }
+    }
+  };
+}

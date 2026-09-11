@@ -1,0 +1,19 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.test.Trend2" : "New",
+    "org.test.Trend1" : "New",
+    "systems.fracture.launcher" : "Pending",
+    "org.test.Game2" : "New",
+    "org.test.G1" : "New",
+    "org.test.Game1" : "New",
+    "org.test.Dev1" : "New",
+    "org.test.T1" : "New"
+  },
+  "noncore" : {
+    "com.cassidyjames.plausible" : [
+      "lalalal"
+    ]
+  },
+  "noncore_label_names" : []
+}

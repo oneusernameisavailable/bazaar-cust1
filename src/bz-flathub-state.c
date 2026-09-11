@@ -19,8 +19,6 @@
  */
 
 #define G_LOG_DOMAIN                 "BAZAAR::FLATHUB"
-#define COLLECTION_FETCH_SIZE        192
-#define CATEGORY_FETCH_SIZE          48
 #define QUALITY_MODERATION_PAGE_SIZE 300
 #define KEYWORD_SEARCH_PAGE_SIZE     48
 #define ADWAITA_URL                  "https://arewelibadwaitayet.com"
@@ -45,6 +43,10 @@ struct _BzFlathubState
   char                    *app_of_the_day;
   GtkStringList           *apps_of_the_week;
   GListStore              *categories;
+
+  GSettings               *settings;
+  gboolean                 first_run;
+  int                      last_fetch_size;
 
   DexFuture *initializing;
 };
@@ -102,6 +104,7 @@ bz_flathub_state_dispose (GObject *object)
 
   dex_clear (&self->initializing);
   g_clear_pointer (&self->map_factory, g_object_unref);
+  g_clear_object (&self->settings);
   clear (self);
 
   G_OBJECT_CLASS (bz_flathub_state_parent_class)->dispose (object);
@@ -389,9 +392,20 @@ serializable_iface_init (BzSerializableInterface *iface)
 }
 
 BzFlathubState *
-bz_flathub_state_new (void)
+bz_flathub_state_new (GSettings   *settings,
+                       gboolean     first_run)
 {
-  return g_object_new (BZ_TYPE_FLATHUB_STATE, NULL);
+  BzFlathubState *self = NULL;
+
+  self                    = g_object_new (BZ_TYPE_FLATHUB_STATE, NULL);
+  self->settings          = settings != NULL ? g_object_ref (settings) : NULL;
+  self->first_run         = first_run;
+  self->last_fetch_size   = settings != NULL ? g_settings_get_int (settings, "last-fetch-size") : 0;
+
+  g_debug ("FlathubState created: first_run=%d last_fetch_size=%d",
+           self->first_run, self->last_fetch_size);
+
+  return self;
 }
 
 const char *
@@ -603,6 +617,12 @@ add_category (BzFlathubState *self,
 
   object = json_node_get_object (node);
 
+  if (object == NULL)
+    {
+      g_warning ("Flathub category '%s' response was not a JSON object", name);
+      return;
+    }
+
   if (is_json_object)
     {
       if (quality_mode == QUALITY_MODE_RANDOM)
@@ -630,7 +650,13 @@ add_category (BzFlathubState *self,
         quality_apps = g_ptr_array_new_with_free_func (g_free);
 
       hits_array = json_object_get_array_member (object, "hits");
-      app_count  = json_array_get_length (hits_array);
+      if (hits_array == NULL)
+        {
+          g_warning ("Flathub category '%s' response missing 'hits' member", name);
+          app_count = 0;
+        }
+      else
+        app_count = json_array_get_length (hits_array);
 
       for (i = 0; i < app_count; i++)
         {
@@ -677,6 +703,7 @@ initialize_fiber (GWeakRef *wr)
   gboolean result                    = FALSE;
   gboolean is_kde                    = is_kde_plasma ();
   g_autoptr (GHashTable) quality_set = NULL;
+  int effective                      = 0;
 
   g_autoptr (DexFuture) aotd_f       = NULL;
   g_autoptr (DexFuture) aotw_f       = NULL;
@@ -695,6 +722,20 @@ initialize_fiber (GWeakRef *wr)
   g_autoptr (DexFuture) game_only_f  = NULL;
 
   bz_weak_get_or_return_reject (self, wr);
+
+  if (self->settings != NULL)
+    {
+      int configured = g_settings_get_int (self->settings, "collection-fetch-size");
+      effective = self->first_run ? 5000 : configured;
+    }
+  else
+    effective = 500;
+
+  if (effective <= 0)
+    effective = 500;
+
+  g_debug ("FlathubState fetch: first_run=%d effective_per_page=%d",
+           self->first_run, effective);
 
   quality_set = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
@@ -730,15 +771,15 @@ initialize_fiber (GWeakRef *wr)
   ADD_REQUEST (aotd_f, "/app-picks/app-of-the-day/%s", self->for_day);
   ADD_REQUEST (aotw_f, "/app-picks/apps-of-the-week/%s", self->for_day);
   ADD_REQUEST (categories_f, "/collection/category");
-  ADD_REQUEST (updated_f, "/collection/recently-updated?page=0&per_page=%d", COLLECTION_FETCH_SIZE);
-  ADD_REQUEST (added_f, "/collection/recently-added?page=0&per_page=%d", COLLECTION_FETCH_SIZE);
-  ADD_REQUEST (popular_f, "/collection/popular?page=0&per_page=%d", COLLECTION_FETCH_SIZE);
-  ADD_REQUEST (trending_f, "/collection/trending?page=0&per_page=%d", COLLECTION_FETCH_SIZE);
-  ADD_REQUEST (mobile_f, "/collection/mobile?page=0&per_page=%d", CATEGORY_FETCH_SIZE);
-  ADD_REQUEST (game_only_f, "/collection/category/game?exclude_subcategories=emulator&exclude_subcategories=packageManager&exclude_subcategories=utility&exclude_subcategories=network&exclude_subcategories=gameTool&exclude_subcategories=launcherStore&sort_by=trending&page=0&per_page=%d", CATEGORY_FETCH_SIZE);
-  ADD_REQUEST (emulators_f, "/collection/category/game/subcategories?subcategory=emulator&sort_by=trending&page=0&per_page=%d", CATEGORY_FETCH_SIZE);
-  ADD_REQUEST (launchers_f, "/collection/category/game/subcategories?subcategory=packageManager&subcategory=launcherStore&sort_by=trending&page=0&per_page=%d", CATEGORY_FETCH_SIZE);
-  ADD_REQUEST (game_tools_f, "/collection/category/game/subcategories?subcategory=utility&subcategory=network&subcategory=gameTool&sort_by=trending&page=0&per_page=%d", CATEGORY_FETCH_SIZE);
+  ADD_REQUEST (updated_f, "/collection/recently-updated?page=0&per_page=%d", effective);
+  ADD_REQUEST (added_f, "/collection/recently-added?page=0&per_page=%d", effective);
+  ADD_REQUEST (popular_f, "/collection/popular?page=0&per_page=%d", effective);
+  ADD_REQUEST (trending_f, "/collection/trending?page=0&per_page=%d", effective);
+  ADD_REQUEST (mobile_f, "/collection/mobile?page=0&per_page=%d", effective);
+  ADD_REQUEST (game_only_f, "/collection/category/game?exclude_subcategories=emulator&exclude_subcategories=packageManager&exclude_subcategories=utility&exclude_subcategories=network&exclude_subcategories=gameTool&exclude_subcategories=launcherStore&sort_by=trending&page=0&per_page=%d", effective);
+  ADD_REQUEST (emulators_f, "/collection/category/game/subcategories?subcategory=emulator&sort_by=trending&page=0&per_page=%d", effective);
+  ADD_REQUEST (launchers_f, "/collection/category/game/subcategories?subcategory=packageManager&subcategory=launcherStore&sort_by=trending&page=0&per_page=%d", effective);
+  ADD_REQUEST (game_tools_f, "/collection/category/game/subcategories?subcategory=utility&subcategory=network&subcategory=gameTool&sort_by=trending&page=0&per_page=%d", effective);
 
 #undef ADD_REQUEST
 
@@ -813,7 +854,7 @@ initialize_fiber (GWeakRef *wr)
 
         request = g_strdup_printf (
             "/collection/category/%s?page=0&per_page=%d",
-            categories[i], CATEGORY_FETCH_SIZE);
+            categories[i], effective);
 
         future = bz_query_flathub_v2_json_take (g_steal_pointer (&request));
         result = dex_await (dex_ref (future), &local_error);
@@ -841,6 +882,12 @@ initialize_fiber (GWeakRef *wr)
     add_category (self, "kde", GET_BOXED (toolkit_f), quality_set, FALSE, QUALITY_MODE_RANDOM, FALSE);
   else if (adwaita_f != NULL)
     add_category (self, "adwaita", GET_BOXED (adwaita_f), quality_set, TRUE, QUALITY_MODE_RANDOM, FALSE);
+
+  self->last_fetch_size = effective;
+  if (self->settings != NULL)
+    g_settings_set_int (self->settings, "last-fetch-size", effective);
+
+  g_debug ("FlathubState fetch complete: persisted last-fetch-size=%d", effective);
 
   return dex_future_new_true ();
 }

@@ -1,0 +1,15 @@
+using Gtk 4.0;
+
+template $BzDecoratedScreenshot: Button {
+  halign: center;
+  focus-on-click: false;
+  styles [
+    "flat", "decorated-screenshot"
+  ]
+
+  child: Gtk.Picture {
+    paintable: bind template.async-texture;
+    content-fit: contain;
+    halign: center;
+  };
+}

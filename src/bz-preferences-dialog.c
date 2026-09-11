@@ -61,14 +61,19 @@ struct _BzPreferencesDialog
   GSettings   *settings;
 
   /* Template widgets */
-  AdwSwitchRow *only_foss_switch;
-  AdwSwitchRow *only_flathub_switch;
-  AdwSwitchRow *only_verified_switch;
-  GtkFlowBox   *flag_buttons_box;
-  AdwSwitchRow *hide_eol_switch;
+  AdwSwitchRow  *only_foss_switch;
+  AdwSwitchRow  *only_flathub_switch;
+  AdwSwitchRow  *only_verified_switch;
+  GtkFlowBox    *flag_buttons_box;
+  AdwSwitchRow  *hide_eol_switch;
+  AdwComboRow   *fetch_size_row;
+  GtkButton     *reload_button;
+  AdwToastOverlay *toast_overlay;
 
   GtkToggleButton *flag_buttons[G_N_ELEMENTS (bar_themes)];
 };
+
+static const int fetch_size_values[] = { 48, 200, 500, 1000, 5000 };
 
 G_DEFINE_FINAL_TYPE (BzPreferencesDialog, bz_preferences_dialog, ADW_TYPE_PREFERENCES_DIALOG)
 
@@ -168,6 +173,58 @@ create_flag_buttons (BzPreferencesDialog *self)
     }
 }
 
+static guint
+fetch_size_index (int value)
+{
+  for (guint i = 0; i < G_N_ELEMENTS (fetch_size_values); i++)
+    {
+      if (fetch_size_values[i] == value)
+        return i;
+    }
+  return 2; /* default 500 */
+}
+
+static void
+fetch_size_changed_cb (AdwComboRow       *row,
+                       GParamSpec         *pspec,
+                       BzPreferencesDialog *self)
+{
+  guint selected = adw_combo_row_get_selected (row);
+
+  if (selected >= G_N_ELEMENTS (fetch_size_values))
+    return;
+
+  g_settings_set_int (self->settings, "collection-fetch-size", fetch_size_values[selected]);
+  g_debug ("Preferences: collection-fetch-size set to %d", fetch_size_values[selected]);
+}
+
+static void
+reload_button_clicked_cb (GtkButton         *button,
+                          BzPreferencesDialog *self)
+{
+  int current = g_settings_get_int (self->settings, "collection-fetch-size");
+  int last    = g_settings_get_int (self->settings, "last-fetch-size");
+  GApplication *app = NULL;
+
+  g_debug ("Preferences reload: collection-fetch-size=%d last-fetch-size=%d",
+           current, last);
+
+  if (current > last)
+    {
+      app = g_application_get_default ();
+      g_debug ("Preferences reload: current %d > last %d, activating app.sync-remotes",
+               current, last);
+      g_action_group_activate_action (G_ACTION_GROUP (app), "sync-remotes", NULL);
+    }
+  else
+    {
+      g_debug ("Preferences reload: current %d <= last %d, deferring to next launch",
+               current, last);
+      adw_toast_overlay_add_toast (self->toast_overlay,
+                                   adw_toast_new (_("Lower fetch size applies on next launch")));
+    }
+}
+
 static void
 bind_settings (BzPreferencesDialog *self)
 {
@@ -197,6 +254,15 @@ bind_settings (BzPreferencesDialog *self)
       G_CALLBACK (global_progress_theme_settings_changed),
       self, G_CONNECT_SWAPPED);
   global_progress_theme_settings_changed (self, "global-progress-bar-theme", self->settings);
+
+  adw_combo_row_set_selected (
+      self->fetch_size_row,
+      fetch_size_index (g_settings_get_int (self->settings, "collection-fetch-size")));
+  g_signal_connect (self->fetch_size_row, "notify::selected",
+                    G_CALLBACK (fetch_size_changed_cb), self);
+  g_signal_connect (self->reload_button, "clicked",
+                    G_CALLBACK (reload_button_clicked_cb), self);
+  gtk_widget_add_css_class (GTK_WIDGET (self->reload_button), "suggested-action");
 }
 
 static void
@@ -264,6 +330,9 @@ bz_preferences_dialog_class_init (BzPreferencesDialogClass *klass)
   gtk_widget_class_bind_template_child (widget_class, BzPreferencesDialog, only_verified_switch);
   gtk_widget_class_bind_template_child (widget_class, BzPreferencesDialog, flag_buttons_box);
   gtk_widget_class_bind_template_child (widget_class, BzPreferencesDialog, hide_eol_switch);
+  gtk_widget_class_bind_template_child (widget_class, BzPreferencesDialog, fetch_size_row);
+  gtk_widget_class_bind_template_child (widget_class, BzPreferencesDialog, reload_button);
+  gtk_widget_class_bind_template_child (widget_class, BzPreferencesDialog, toast_overlay);
   gtk_widget_class_bind_template_callback (widget_class, invert_boolean);
 }
 

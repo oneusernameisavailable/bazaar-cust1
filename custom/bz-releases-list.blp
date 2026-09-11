@@ -1,0 +1,34 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzReleasesList: Adw.Bin {
+  visible: false;
+  child: Box {
+    orientation: vertical;
+    spacing: 12;
+    ListBox preview_box {
+      styles [
+        "boxed-list",
+      ]
+
+      selection-mode: none;
+      valign: start;
+    }
+
+    ListBox show_all_box {
+      visible: false;
+      styles [
+        "boxed-list",
+      ]
+
+      selection-mode: none;
+
+      Adw.ButtonRow {
+        title: _("_Version History");
+        use-underline: true;
+        activated => $show_all_releases_cb();
+        end-icon-name: "go-next-symbolic";
+      }
+    }
+  };
+}

@@ -1,0 +1,76 @@
+# Bazaar Quality Gate Configuration
+# Single source of truth for all quality checks
+
+quality_gates:
+  # 1. Compile + Format (fast, mandatory)
+  compile:
+    - name: "Format Check"
+      command: "clang-format --dry-run --Werror $(find src tests -name '*.c' -o -name '*.h' 2>/dev/null)"
+      timeout: 30s
+    - name: "Build"
+      command: "meson compile -C build"
+      timeout: 60s
+
+  # 2. Static Analysis (mandatory)
+  static:
+    - name: "clang-tidy"
+      command: "clang-tidy -p build $(find src tests -name '*.c' 2>/dev/null) --checks='bugprone-*,clang-analyzer-*,performance-*,portability-*,modernize-*,readability-*'"
+      timeout: 120s
+    - name: "cppcheck"
+      command: "cppcheck --enable=all --suppress=missingIncludeSystem --std=c11 src/ tests/"
+      timeout: 60s
+    - name: "CodeQL"  # optional, if available
+      command: |
+        if command -v codeql &>/dev/null; then
+          codeql database create /tmp/bazaar-db --language=c --command="meson compile -C build" 2>&1 &&
+          codeql database analyze /tmp/bazaar-db --format=sarif-latest --output=/tmp/results.sarif 2>&1
+        else
+          echo "CodeQL not installed, skipping"
+        fi
+      timeout: 180s
+
+  # 3. Sanitizers (mandatory, run in parallel)
+  sanitizers:
+    - name: "AddressSanitizer"
+      build: "meson setup build-asan -Db_sanitize=address"
+      test: "meson test -C build-asan --print-errorlogs"
+      timeout: 120s
+    - name: "ThreadSanitizer"
+      build: "meson setup build-tsan -Db_sanitize=thread"
+      test: "meson test -C build-tsan --print-errorlogs"
+      timeout: 120s
+    - name: "UndefinedBehaviorSanitizer"
+      build: "meson setup build-ubsan -Db_sanitize=undefined"
+      test: "meson test -C build-ubsan --print-errorlogs"
+      timeout: 120s
+
+  # 4. Valgrind (memory leaks)
+  valgrind:
+    - name: "Valgrind Leak Check"
+      command: "valgrind --leak-check=full --error-exitcode=1 ./build/src/bazaar --no-window"
+      timeout: 60s
+
+  # 5. Tests (mandatory)
+  test:
+    - name: "Full Test Suite"
+      command: "meson test -C build --print-errorlogs"
+      timeout: 120s
+
+  # 6. Adversarial Review (mandatory)
+  adversarial:
+    - name: "Adversarial Code Review"
+      prompt: ".opencode/skills/eval-prompts/adversarial-review.md"
+      context: "diff + changed files"
+      model: "same"
+
+# Guard rails - must hold across ALL experiments
+guard_rails:
+  - "No compilation errors"
+  - "No AddressSanitizer errors"
+  - "No ThreadSanitizer errors"
+  - "No UndefinedBehaviorSanitizer errors"
+  - "No Valgrind definite/indirect leaks"
+  - "All tests pass"
+  - "clang-format clean"
+  - "clang-tidy: 0 errors"
+  - "Adversarial: PASS or CONDITIONAL with resolved items"

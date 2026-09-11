@@ -1,0 +1,15 @@
+prefix=bz
+name=curated_banner
+parent-prefix=g
+parent-name=object
+author=AUTOGEN
+
+include=<gtk/gtk.h>
+
+include="bz-curated-image-info.h"
+
+property=image BzCuratedImageInfo BZ_TYPE_CURATED_IMAGE_INFO object
+
+property=light_color char G_TYPE_STRING string
+property=dark_color char G_TYPE_STRING string
+property=height int G_TYPE_INT int

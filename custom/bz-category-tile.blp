@@ -1,0 +1,38 @@
+using Gtk 4.0;
+
+template $BzCategoryTile: Button {
+  styles [
+    "card",
+    "category-tile",
+  ]
+
+  child: Box {
+    margin-start: 16;
+    margin-end: 16;
+    margin-top: 24;
+    margin-bottom: 24;
+    orientation: vertical;
+    spacing: 12;
+    valign: center;
+    halign: center;
+
+    Image {
+      pixel-size: 48;
+      icon-name: bind template.category as <$BzFlathubCategory>.icon-name;
+      visible: bind $invert_boolean($is_null(template.category as <$BzFlathubCategory>.icon-name) as <bool>) as <bool>;
+
+      styles [
+        "icon-dropshadow",
+      ]
+    }
+
+    Label {
+      css-name: "category-tile-label";
+      halign: center;
+      xalign: 0.5;
+      label: bind template.category as <$BzFlathubCategory>.short-name;
+      wrap: true;
+      wrap-mode: word_char;
+    }
+  };
+}

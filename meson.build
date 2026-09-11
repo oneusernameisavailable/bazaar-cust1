@@ -132,6 +132,7 @@ else
     subdir('bge')
     subdir('data')
     subdir('src')
+    subdir('custom')
     subdir('po')
 
     gnome.post_install(

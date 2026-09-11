@@ -1,0 +1,88 @@
+using Gtk 4.0;
+
+template $BzFeaturedCarousel: Box {
+  orientation: vertical;
+  spacing: 12;
+
+  EventControllerFocus {
+    enter => $on_focus_enter_cb(template);
+    leave => $on_focus_leave_cb(template);
+  }
+
+  Overlay {
+    [overlay]
+    Button previous_button {
+      halign: start;
+      valign: center;
+      width-request: 48;
+      height-request: 48;
+      margin-start: 12;
+      icon-name: "go-previous-symbolic";
+      visible: bind $is_gt(selection.n-items, 1);
+
+      clicked => $previous_button_clicked_cb();
+
+      styles [
+        "circular",
+        "flat",
+        "image-button",
+      ]
+
+      accessibility {
+        label: _("Previous");
+      }
+    }
+
+    [overlay]
+    Button next_button {
+      halign: end;
+      valign: center;
+      width-request: 48;
+      height-request: 48;
+      margin-end: 12;
+      icon-name: "go-next-symbolic";
+      visible: bind $is_gt(selection.n-items, 1);
+
+      clicked => $next_button_clicked_cb();
+
+      styles [
+        "circular",
+        "flat",
+        "image-button",
+      ]
+
+      accessibility {
+        label: _("Next");
+      }
+    }
+
+    child: $BgeCarousel carousel {
+      styles [
+        "card",
+        "featured-carousel"
+      ]
+      notify::has-focus => $carousel_focus_cb();
+
+      allow-mouse-drag: true;
+      allow-overshoot: false;
+      allow-scroll-wheel: true;
+      allow-raise: false;
+
+      create-widget => $on_create_widget(template);
+      remove-widget => $on_remove_widget(template);
+      focusable: true;
+
+      model: SingleSelection selection {
+        autoselect: true;
+        model: bind template.model;
+
+        notify::selected => $on_notify_selected(template);
+        // notify::n-items => $on_notify_n_items(template);
+      };
+    };
+  }
+
+  EventControllerKey {
+    key-pressed => $key_pressed_cb();
+  }
+}

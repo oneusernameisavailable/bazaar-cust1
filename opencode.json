@@ -1,0 +1,57 @@
+{
+  "skills": {
+    "always": [
+      "intent-gate",
+      "workflow-guard",
+      "context-memory"
+    ],
+    "on_demand": {
+      "architect": "planning phase",
+      "code": "coding phase",
+      "quality-gate": "validation phase"
+    }
+  },
+  "agents": {
+    "architect": {
+      "description": "Architecture planner. Designs data flow, module boundaries, and API contracts before any code is written.",
+      "skills": ["architect", "intent-gate", "workflow-guard", "context-memory"],
+      "tools": ["read", "grep", "glob", "task", "bash"],
+      "rules": [
+        "Never write code — only plans, diagrams, and specifications",
+        "Every plan must version-check every dependency and API",
+        "Every plan must include a building-block impact analysis",
+        "Output a MARKER file at tests/runbooks/current-plan.md before finishing"
+      ]
+    },
+    "coder": {
+      "description": "Surgical C code implementor. Writes minimal changes, one file at a time.",
+      "skills": ["code", "intent-gate", "workflow-guard", "context-memory"],
+      "tools": ["read", "write", "edit", "grep", "glob", "bash"],
+      "rules": [
+        "Only one file modified per substep unless strictly coupled",
+        "Run 'just check' after every edit. If it fails, fix before proceeding.",
+        "Run 'just test' after every edit. If any test fails, fix before proceeding.",
+        "State EDIT INTENT before every modification",
+        "After EVERY compile failure: read tests/runbooks/debug-cycle.md and follow it exactly",
+        "After EVERY just check failure with non-trivial diff: launch evaluator subagent BEFORE fixing"
+      ]
+    }
+  },
+  "permissions": {
+    "bash": {
+      "allowed_patterns": [
+        "meson*",
+        "ninja*",
+        "just*",
+        "pre-commit*",
+        "git*",
+        "clang-format*",
+        "clang-tidy*",
+        "mkdir*",
+        "valgrind*",
+        "cppcheck*",
+        "codeql*"
+      ]
+    }
+  }
+}

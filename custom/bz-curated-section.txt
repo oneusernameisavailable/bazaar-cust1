@@ -1,0 +1,18 @@
+prefix=bz
+name=curated_section
+parent-prefix=g
+parent-name=object
+author=AUTOGEN
+
+include=<gtk/gtk.h>
+
+include="bz-entry-group.h"
+include="bz-curated-appids-info.h"
+include="bz-curated-markdown-info.h"
+
+property=title char G_TYPE_STRING string
+property=subtitle BzCuratedMarkdownInfo BZ_TYPE_CURATED_MARKDOWN_INFO object
+property=appids BzCuratedAppidsInfo BZ_TYPE_CURATED_APPIDS_INFO object
+property=list_type char G_TYPE_STRING string
+property=enable_bulk_install gboolean G_TYPE_BOOLEAN boolean
+property=overflow_count int G_TYPE_INT int

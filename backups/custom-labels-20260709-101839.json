@@ -1,0 +1,17 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.test.G1" : "New",
+    "org.test.T1" : "New"
+  },
+  "noncore" : {
+    "org.test.T1" : [
+      "Test1",
+      "Test2"
+    ]
+  },
+  "noncore_label_names" : [
+    "Test1",
+    "Test2"
+  ]
+}

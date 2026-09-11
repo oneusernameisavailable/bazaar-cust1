@@ -1,0 +1,91 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzArticle: Adw.NavigationPage {
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      overflow: hidden;
+
+      [title]
+      Revealer {
+        reveal-child: bind $is_scrolled_down(main_scroll.vadjustment as <Adjustment>.value) as <bool>;
+        transition-type: slide_up;
+        transition-duration: 500;
+        overflow: visible;
+        child: Label {
+          label: bind template.article as <$BzCuratedArticle>.title;
+          styles ["title"]
+        };
+      }
+    }
+
+    content: Adw.ViewStack stack {
+      hexpand: true;
+      vexpand: true;
+
+      Adw.ViewStackPage {
+        name: "loading";
+        child: Adw.Spinner {
+          hexpand: true;
+          vexpand: true;
+          halign: center;
+          valign: center;
+          width-request: 64;
+          height-request: 64;
+        };
+      }
+
+      Adw.ViewStackPage {
+        name: "content";
+        child: ScrolledWindow main_scroll {
+          hexpand: true;
+          vexpand: true;
+          hscrollbar-policy: never;
+
+          child: Adw.Clamp {
+            margin-top: 20;
+            margin-bottom: 50;
+            margin-start: 20;
+            margin-end: 20;
+            maximum-size: 800;
+
+            child: Box {
+              orientation: vertical;
+
+              Label {
+                label: bind template.article as <$BzCuratedArticle>.title;
+                wrap: true;
+                wrap-mode: word_char;
+                margin-bottom: 12;
+                selectable: true;
+                xalign: 0;
+
+                styles [
+                  "title-1",
+                ]
+              }
+              $BgeMarkdownRender render {
+                styles [
+                  "article",
+                ]
+
+                spacing: 12;
+                hexpand: true;
+                bind-inline-uri => $markdown_bind_inline_uri(template);
+              }
+            };
+          };
+        };
+      }
+
+      Adw.ViewStackPage {
+        name: "error";
+        child: Adw.StatusPage {
+          icon-name: "computer-fail-symbolic";
+          title: _("Failed to Load Article");
+        };
+      }
+    };
+  };
+}

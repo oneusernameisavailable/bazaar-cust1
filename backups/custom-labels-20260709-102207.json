@@ -1,0 +1,14 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.test.App1" : "Pending"
+  },
+  "noncore" : {
+    "org.test.App1" : [
+      "Test1"
+    ]
+  },
+  "noncore_label_names" : [
+    "Test1"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  // GTK4/libadwaita API verification rule
+  // Before editing any C file that references GTK4 or libadwaita functions,
+  // verify the function exists in the installed documentation.
+  //
+  // Sources:
+  //   - /usr/share/doc/gtk4/           (class.*.html)
+  //   - /usr/share/doc/libadwaita-1/    (class.*.html)
+  //   - docs/gtk4.md                    (project-specific conventions)
+  //   - VERSIONS.md                     (version compatibility)
+  //
+  "trigger": {
+    "on_edit": ["*.c", "*.h"]
+  },
+  "check": [
+    {
+      "condition": "file contains 'gtk_' or 'adw_'",
+      "action": [
+        "grep -l '<function>' /usr/share/doc/gtk4/*.html 2>/dev/null || ",
+        "grep -l '<function>' /usr/share/doc/libadwaita-1/*.html 2>/dev/null || ",
+        "echo 'API not in local docs — use mcp-server-context7 or ask user'"
+      ]
+    }
+  ],
+  "compliance": "MANDATORY — any GTK4/libadwaita function call not verified against installed docs is a rule violation"
+}

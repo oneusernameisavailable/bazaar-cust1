@@ -1,0 +1,129 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzLicenseDialog: Adw.Bin {
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      show-title: false;
+    }
+
+    content: Adw.Clamp {
+      maximum-size: 600;
+
+      child: Box {
+        orientation: vertical;
+        margin-top: 6;
+        margin-bottom: 18;
+        margin-start: 18;
+        margin-end: 18;
+
+        Box {
+          orientation: vertical;
+          margin-bottom: 16;
+          valign: center;
+          vexpand: true;
+
+          $BzLozenge {
+            visible: bind template.entry as <$BzEntry>.is-floss as <bool>;
+            title: bind $get_label_cb(template.entry as <$BzEntry>) as <string>;
+
+            icon-names: [
+              "heart-outline-thick-symbolic",
+              "community-symbolic",
+              "thumbs-up-outline-symbolic",
+            ];
+
+            importance: unimportant;
+          }
+
+          $BzLozenge {
+            visible: bind $invert_boolean(template.entry as <$BzEntry>.is-floss as <bool>) as <bool>;
+            title: bind $get_label_cb(template.entry as <$BzEntry>) as <string>;
+
+            icon-names: [
+              "hand-openyay-symbolic",
+              "proprietary-code-symbolic",
+              "license-symbolic",
+            ];
+
+            importance: information;
+          }
+        }
+
+        Box {
+          orientation: vertical;
+          spacing: 6;
+          margin-bottom: 12;
+
+          Label {
+            label: bind $get_license_info(template.entry as <$BzEntry>) as <string>;
+            valign: start;
+            margin-bottom: 18;
+            margin-start: 18;
+            margin-end: 18;
+            use-markup: true;
+            xalign: 0.50;
+            wrap: true;
+            wrap-mode: word_char;
+            justify: center;
+          }
+
+          Button {
+            styles [
+              "pill",
+            ]
+
+            visible: bind template.entry as <$BzEntry>.is-floss as <bool>;
+            clicked => $contribute_cb(template);
+            tooltip-text: bind $get_involved_tooltip(template.entry) as <string>;
+            halign: center;
+
+            child: Box {
+              orientation: horizontal;
+              spacing: 10;
+
+              Label {
+                label: _("Get Involved");
+                wrap: true;
+                wrap-mode: word_char;
+                justify: right;
+              }
+
+              Image {
+                icon-name: "external-link-symbolic";
+              }
+            };
+          }
+
+          Button {
+            styles [
+              "pill",
+            ]
+
+            visible: bind $should_show_eula(template.entry as <$BzEntry>) as <bool>;
+            clicked => $eula_cb(template);
+            tooltip-text: bind $eula_tooltip(template.entry) as <string>;
+            halign: center;
+
+            child: Box {
+              orientation: horizontal;
+              spacing: 10;
+
+              Label {
+                label: _("Learn More");
+                wrap: true;
+                wrap-mode: word_char;
+                justify: right;
+              }
+
+              Image {
+                icon-name: "external-link-symbolic";
+              }
+            };
+          }
+        }
+      };
+    };
+  };
+}

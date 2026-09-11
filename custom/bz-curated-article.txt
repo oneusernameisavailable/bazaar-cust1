@@ -1,0 +1,12 @@
+prefix=bz
+name=curated_article
+parent-prefix=g
+parent-name=object
+author=AUTOGEN
+
+include=<gtk/gtk.h>
+
+property=title char G_TYPE_STRING string
+property=subtitle char G_TYPE_STRING string
+property=image char G_TYPE_STRING string
+property=uri char G_TYPE_STRING string

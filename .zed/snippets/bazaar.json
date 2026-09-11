@@ -1,0 +1,137 @@
+{
+  "New GObject Final Type": {
+    "prefix": "gobject-final",
+    "description": "Bazaar GObject final type skeleton with G_DECLARE_FINAL_TYPE",
+    "body": [
+      "struct _${1:Name} {",
+      "  GObject parent;",
+      "",
+      "  ${2:/* private fields */}",
+      "};",
+      "",
+      "G_DEFINE_TYPE (${1:Name}, ${1:_fn_snake_case}, G_TYPE_OBJECT);",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_init (${1:Name} *self) {",
+      "  ${3}",
+      "}",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_finalize (GObject *object) {",
+      "  ${1:Name} *self = ${1:Name}_cast (object);",
+      "",
+      "  ${4:/* cleanup */}",
+      "",
+      "  G_OBJECT_CLASS (${1:_fn_snake_case}_parent_class)->finalize (object);",
+      "}",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_class_init (${1:Name}Class *klass) {",
+      "  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);",
+      "  gobject_class->finalize = ${1:_fn_snake_case}_finalize;",
+      "}"
+    ]
+  },
+  "New GtkWidget Subclass": {
+    "prefix": "gtkwidget-subclass",
+    "description": "Bazaar GtkWidget subclass skeleton with G_DECLARE_FINAL_TYPE",
+    "body": [
+      "struct _${1:Name} {",
+      "  GtkWidget parent;",
+      "",
+      "  ${2:/* private fields */}",
+      "};",
+      "",
+      "G_DEFINE_TYPE (${1:Name}, ${1:_fn_snake_case}, GTK_TYPE_WIDGET);",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_init (${1:Name} *self) {",
+      "  ${3}",
+      "}",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_finalize (GObject *object) {",
+      "  ${1:Name} *self = ${1:Name}_cast (object);",
+      "  ${4}",
+      "  G_OBJECT_CLASS (${1:_fn_snake_case}_parent_class)->finalize (object);",
+      "}",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec) {",
+      "  ${1:Name} *self = ${1:Name}_cast (object);",
+      "  switch (prop_id) {",
+      "  default:",
+      "    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);",
+      "  }",
+      "}",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec) {",
+      "  ${1:Name} *self = ${1:Name}_cast (object);",
+      "  switch (prop_id) {",
+      "  default:",
+      "    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);",
+      "  }",
+      "}",
+      "",
+      "static void",
+      "${1:_fn_snake_case}_class_init (${1:Name}Class *klass) {",
+      "  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);",
+      "  gobject_class->finalize = ${1:_fn_snake_case}_finalize;",
+      "  gobject_class->get_property = ${1:_fn_snake_case}_get_property;",
+      "  gobject_class->set_property = ${1:_fn_snake_case}_set_property;",
+      "}"
+    ]
+  },
+  "Add Test Func": {
+    "prefix": "test-func",
+    "description": "Bazaar test function skeleton with failure message format",
+    "body": [
+      "static void",
+      "test_${1:name} (void)",
+      "{",
+      "  ${2:/* Arrange */}",
+      "",
+      "  ${3:/* Act */}",
+      "",
+      "  g_assert_nonnull_msg (${4:result},",
+      "    \"test_${1:name} at ${RELATIVE_FILEPATH}:${CURSOR_LINE:0} \"",
+      "    \"— ${5:failure description}\");",
+      "}"
+    ]
+  },
+  "Add App Accessible Widget": {
+    "prefix": "accessible-widget",
+    "description": "GTK4 widget with accessible name for AT-SPI testing",
+    "body": [
+      "${1:widget} = g_object_new (${2:GTK_TYPE_BUTTON},",
+      "    \"accessible-role\", GTK_ACCESSIBLE_ROLE_${3:BUTTON},",
+      "    \"accessible-label\", \"${4:Widget Name}\",",
+      "    NULL);"
+    ]
+  },
+  "Dex Future Chain": {
+    "prefix": "dex-future-chain",
+    "description": "Bazaar async operation pattern using libdex DexFuture",
+    "body": [
+      "dex_future_ref (${1:future});",
+      "",
+      "dex_future_on_value (${1:future}, dex_main_context_get_current (),",
+      "  dex_auto_callback (${2:callback_name}, gpointer /* unused */, GObject *result) {",
+      "    ${3:/* handle result */}",
+      "  }),",
+      "  dex_auto_callback (${4:error_callback}, gpointer /* unused */, GError *error) {",
+      "    g_warning (\"${5:operation} failed: %s\", error->message);",
+      "  });"
+    ]
+  },
+  "bz_show_error_for_widget": {
+    "prefix": "bz-show-error",
+    "description": "Display a toast error with details button in Bazaar",
+    "body": [
+      "bz_show_error_for_widget (GTK_WIDGET (${1:widget}),",
+      "    \"${2:Error Title}\",",
+      "    \"${3:Error description}\");"
+    ]
+  }
+}

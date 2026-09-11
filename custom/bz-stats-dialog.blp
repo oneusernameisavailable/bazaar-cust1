@@ -1,0 +1,96 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $BzStatsDialog: Adw.BreakpointBin {
+  width-request: 360;
+  height-request: 450;
+  child: Adw.ToolbarView {
+    bottom-bar-style: raised_border;
+
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.ViewSwitcher switcher_title {
+        visible: bind $logical_and($model_has_enough_points(template.model) as <bool>, $invert_boolean($is_null(template.country-model) as <bool>) as <bool>) as <bool>;
+        stack: stack;
+        policy: wide;
+      };
+    }
+
+    content: Box {
+      orientation: vertical;
+
+      Adw.ViewStack stack {
+        vexpand: true;
+
+        Adw.ViewStackPage {
+          name: "graph";
+          title: _("Timeline");
+          icon-name: "graph2-symbolic";
+          visible: bind $model_has_enough_points(template.model) as <bool>;
+
+          child: Box {
+            orientation: vertical;
+
+              Label {
+                label: bind $format_total_downloads(template.total-downloads) as <string>;
+                halign: end;
+                hexpand: true;
+                margin-end: 34;
+                margin-bottom: 2;
+
+                styles ["dimmed"]
+              }
+
+            $BzDataGraph graph {
+              model: bind template.model;
+              tooltip-prefix: _("Installs:");
+              vexpand: true;
+              hexpand: true;
+            }
+          };
+        }
+
+        Adw.ViewStackPage {
+          name: "map";
+          title: _("World");
+          icon-name: "globe-symbolic";
+
+          child: Box {
+            orientation: vertical;
+            margin-top:10;
+            margin-bottom: 10;
+
+            $BzWorldMap world_map {
+              model: bind template.country-model;
+              vexpand: true;
+            }
+
+            Label {
+              label: _("Since 4/15/2024");
+              halign: center;
+
+              styles [
+                "dimmed",
+                "caption"
+              ]
+            }
+          };
+        }
+      }
+
+      Adw.ViewSwitcherBar switcher_bar {
+        visible: bind $invert_boolean($is_null(template.country-model) as <bool>) as <bool>;
+        stack: stack;
+      }
+    };
+  };
+
+  Adw.Breakpoint {
+    condition ("max-width: 450sp")
+
+    setters {
+      switcher_title.stack: null;
+      switcher_bar.reveal: true;
+    }
+  }
+}

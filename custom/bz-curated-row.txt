@@ -1,0 +1,15 @@
+prefix=bz
+name=curated_row
+parent-prefix=g
+parent-name=object
+author=AUTOGEN
+
+include="bz-curated-section.h"
+include="bz-curated-featured-carousel.h"
+include="bz-curated-banner.h"
+include="bz-curated-articles-info.h"
+
+property=section BzCuratedSection BZ_TYPE_CURATED_SECTION object
+property=featured_carousel BzCuratedFeaturedCarousel BZ_TYPE_CURATED_FEATURED_CAROUSEL object
+property=banner BzCuratedBanner BZ_TYPE_CURATED_BANNER object
+property=articles BzCuratedArticlesInfo BZ_TYPE_CURATED_ARTICLES_INFO object

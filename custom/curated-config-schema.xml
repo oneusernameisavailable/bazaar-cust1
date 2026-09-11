@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<object class="BzRootCuratedConfig">
+  <typehint name="rows" type="BzCuratedRow"/>
+  <typehint name="rows.section.appids.list" type="GtkStringObject"/>
+  <typehint name="rows.featured-carousel.appids.list" type="GtkStringObject"/>
+  <typehint name="rows.articles.list" type="BzCuratedArticle"/>
+</object>

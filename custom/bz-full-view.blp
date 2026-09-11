@@ -1,0 +1,750 @@
+using Gtk 4.0;
+using Gio 2.0;
+using Adw 1;
+
+template $BzFullView: Adw.Bin {
+  child: Adw.ToolbarView {
+
+    [top]
+    Adw.HeaderBar header_bar {
+      overflow: hidden;
+
+      [title]
+      Revealer {
+        reveal-child: bind $is_scrolled_down(main_scroll.vadjustment as <Adjustment>.value) as <bool>;
+        transition-type: slide_up;
+        transition-duration: 500;
+        overflow: visible;
+        child: Label {
+          label: bind template.entry-group as <$BzEntryGroup>.title;
+          styles ["title"]
+        };
+      }
+
+      [end]
+      Box {
+        MenuButton core_label_button {
+          icon-name: "open-menu-symbolic";
+          has-tooltip: true;
+          tooltip-text: _("App Label");
+        }
+
+        MenuButton noncore_label_button {
+          icon-name: "open-menu-symbolic";
+          has-tooltip: true;
+          tooltip-text: _("Non-Core Label");
+        }
+      }
+    }
+
+    content: Adw.ViewStack stack {
+      enable-transitions: true;
+
+      Adw.ViewStackPage {
+        name: "empty";
+        title: _("Empty");
+
+        child: Adw.StatusPage {
+          icon-name: "sad-computer-symbolic";
+          title: _("No Results");
+          description: _("Try a different search query");
+        };
+      }
+
+      Adw.ViewStackPage {
+        name: "loading";
+        title: _("Empty");
+        child: Adw.Bin {};
+      }
+
+      Adw.ViewStackPage {
+        name: "content";
+        title: _("Content");
+
+        child: Adw.BreakpointBin {
+          width-request: 360;
+          height-request: 100;
+
+          Adw.Breakpoint {
+            condition ("max-width: 700px")
+
+            setters {
+              context_bar.orientation: vertical;
+              context_bar.spacing: 4;
+              context_bar.homogeneous: false;
+              header_box.spacing: 12;
+              app_name_box.spacing: 0;
+              formfactor_support_tile_wide.visible: false;
+              formfactor_support_tile_narrow.visible: true;
+              screenshots.compact: true;
+              header_bar.show-title: false;
+              link_list.dual-column: false;
+            }
+          }
+
+          child: Adw.BreakpointBin breakpoint_bin {
+            width-request: 360;
+            height-request: 100;
+
+            Adw.Breakpoint breakpoint {
+              condition ("max-width: 525px")
+
+              setters {
+                top_box.margin-start: 10;
+                top_box.margin-end: 10;
+                bottom_box.margin-start: 10;
+                bottom_box.margin-end: 10;
+                bottom_box.margin-top: 5;
+                wide_install_controls.visible: false;
+                narrow_install_controls.visible: true;
+                app_icon.valign: start;
+                app_icon.pixel-size: 96;
+              }
+            }
+
+            child: Overlay {
+              [overlay]
+              Box shadow_overlay {
+                valign: start;
+                height-request: 3;
+                can-target: false;
+              }
+
+              child: ScrolledWindow main_scroll {
+                child: Box main_box {
+                  orientation: vertical;
+                  vexpand: false;
+                  margin-bottom: 15;
+                  spacing: 20;
+
+                  Adw.Banner {
+                    title: _("This is a local preview, some details may differ from the published listing");
+                    visible: bind $metainfo_banner_visible(template.ui-entry as <$BzResult>.object as <$BzFlatpakEntry>.remote-repo-name) as <bool>;
+                    revealed: true;
+                    button-label: _("Preview Store Appearance");
+                    button-clicked => $preview_other_metainfo_cb(template);
+                  }
+
+                  Adw.Clamp {
+                    maximum-size: 910;
+                    tightening-threshold: 576;
+                    margin-top: 15;
+
+                    child: Box top_box {
+                      orientation: vertical;
+                      margin-start: 25;
+                      margin-end: 25;
+                      spacing: 20;
+
+                      Box header_box {
+                        orientation: horizontal;
+                        spacing: 20;
+
+                        Image app_icon {
+                          valign: center;
+                          halign: center;
+                          pixel-size: 128;
+                          paintable: bind template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.icon-paintable;
+                          visible: bind $invert_boolean($is_null(template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.icon-paintable) as <bool>) as <bool>;
+
+                          styles [
+                            "icon-dropshadow",
+                          ]
+                        }
+
+                        Image fallback_icon {
+                          valign: center;
+                          halign: center;
+                          pixel-size: 128;
+                          icon-name: "application-x-executable";
+                          visible: bind $is_null(template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.icon-paintable) as <bool>;
+
+                          styles [
+                            "icon-dropshadow",
+                          ]
+                        }
+
+                        Box not_icon {
+                          orientation: horizontal;
+                          baseline-position: center;
+                          halign: fill;
+                          hexpand: true;
+                          spacing: 15;
+
+                          Box app_name_box {
+                            orientation: vertical;
+                            valign: center;
+                            hexpand: true;
+                            spacing: 3;
+
+                            Label {
+                              styles [
+                                "title-1",
+                                "app-title",
+                              ]
+
+                              xalign: 0.0;
+                              wrap: true;
+                              lines: 2;
+                              ellipsize: end;
+                              wrap-mode: word_char;
+                              natural-wrap-mode: word;
+                              selectable: true;
+                              label: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.title;
+                            }
+
+                            Box {
+                              styles [
+                                "bz-debug",
+                              ]
+
+                              halign: start;
+                              orientation: horizontal;
+                              spacing: 6;
+                              visible: bind template.state as <$BzStateInfo>.debug-mode;
+
+                              Button {
+                                icon-name: "edit-copy-symbolic";
+                                clicked => $copy_id_cb(template);
+                              }
+                              Label {
+                                styles [
+                                  "bz-monospace",
+                                ]
+                                selectable: true;
+                                label: bind template.entry-group as <$BzEntryGroup>.id;
+                              }
+                              Button {
+                                label: "Inspect UI Entry";
+                                clicked => $debug_id_inspect_cb(template);
+                              }
+                            }
+
+                            $BzDeveloperBadge {
+                              entry: bind template.ui-entry as <$BzResult>.object as <$BzEntry>;
+                            }
+
+                            Box {
+                              layout-manager: Adw.WrapLayout {
+                                child-spacing: 10;
+                                line-spacing: 0;
+                              };
+
+                              Button {
+                                visible: bind $invert_boolean($is_null(template.ui-entry as <$BzResult>.object as <$BzEntry>.donation-url) as <bool>) as <bool>;
+
+                                styles [
+                                  "small-pill",
+                                  "suggested-action",
+                                  "support",
+                                ]
+
+                                margin-top: 8;
+                                valign: start;
+                                halign: start;
+                                has-tooltip: true;
+                                tooltip-text: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.donation-url;
+                                clicked => $support_cb(template);
+
+                                child: Adw.ButtonContent {
+                                  use-underline: true;
+                                  label: _("_Support");
+                                  icon-name: "heart-filled-symbolic";
+                                };
+                              }
+
+                              $BzFavoriteButton {
+                                state: bind template.state as <$BzStateInfo>;
+                                entry: bind template.ui-entry as <$BzResult>.object as <$BzEntry>;
+                              }
+                            }
+                          }
+                          $BzInstallControls wide_install_controls {
+                            wide: true;
+                            entry-group: bind template.entry-group as <$BzEntryGroup>;
+                            state: bind template.state as <$BzStateInfo>;
+                            settings: bind template.state as <$BzStateInfo>.settings;
+                            update => $update_cb(template);
+                          }
+                        }
+                      }
+
+                      Box context_bar {
+                        hexpand: false;
+                        homogeneous: true;
+                        spacing: 0;
+                        orientation: horizontal;
+                        halign: fill;
+
+                        styles [
+                          "app-context-bar",
+                        ]
+
+                        Box {
+                          homogeneous: true;
+
+                          $BzContextTile download_size_tile {
+                            label: bind try {$get_size_label(
+                              $is_zero(template.entry-group as <$BzEntryGroup>.removable) as <bool>,
+                              template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzFlatpakEntry>.runtime as <$BzResult>.object as <$BzEntry>.installed,
+                              template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzFlatpakEntry>.runtime as <$BzResult>.object as <$BzEntry>.size,
+                            ) as <string>, $get_size_label($is_zero(template.entry-group as <$BzEntryGroup>.removable) as <bool>,0,0) as <string>};
+                            has-tooltip: true;
+                            tooltip-text: bind $format_size_tooltip(template.ui-entry as <$BzResult>.object as <$BzEntry>.size) as <string>;
+                            lozenge-style: "grey";
+                            sensitive: bind $invert_boolean($is_zero($get_size_type(template.ui-entry as <$BzResult>.object as <$BzEntry>, $is_zero(template.entry-group as <$BzEntryGroup>.removable) as <bool>) as <uint64>) as <bool>) as <bool>;
+                            clicked => $size_cb(template);
+
+                            lozenge-child: Label {
+                              justify: center;
+                              label: bind $format_size($get_size_type(template.ui-entry as <$BzResult>.object as <$BzEntry>, $is_zero(template.entry-group as <$BzEntryGroup>.removable) as <bool>) as <uint64>) as <string>;
+                              lines: 3;
+                              ellipsize: end;
+                              halign: center;
+                              wrap: true;
+                              xalign: 0.5;
+                              use-markup: true;
+                            };
+                          }
+
+                          $BzContextTile license_tile {
+                            label: bind $get_license_label(template.ui-entry as <$BzResult>.object as <$BzEntry>) as <string>;
+                            lozenge-style: bind $bool_to_string(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-floss, "grey", "warning") as <string>;
+                            clicked => $license_cb(template);
+                            has-tooltip: true;
+                            tooltip-text: bind $format_license_tooltip(template.ui-entry as <$BzResult>.object as <$BzEntry>) as <string>;
+
+                            lozenge-child: Box {
+                              spacing: 6;
+
+                              Image {
+                                icon-name: bind $get_license_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-floss, 0) as <string>;
+                              }
+
+                              Image {
+                                icon-name: bind $get_license_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-floss, 1) as <string>;
+                              }
+                            };
+                          }
+
+                          $BzContextTile {
+                            clicked => $safety_cb(template);
+                            label: bind $get_safety_rating_label(template.ui-entry as <$BzResult>.object as <$BzEntry>) as <string>;
+                            lozenge-style: bind $get_safety_rating_style(template.ui-entry as <$BzResult>.object as <$BzEntry>) as <string>;
+
+                            lozenge-child: Box {
+                              spacing: 4;
+
+                              Image {
+                                icon-name: bind $get_safety_rating_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>,0) as <string>;
+                                visible: bind $invert_boolean($is_empty_string($get_safety_rating_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>,0) as <string>) as <bool>) as <bool>;
+                              }
+                              Image {
+                                icon-name: bind $get_safety_rating_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>,1) as <string>;
+                                visible: bind $invert_boolean($is_empty_string($get_safety_rating_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>,1) as <string>) as <bool>) as <bool>;
+                              }
+                              Image {
+                                icon-name: bind $get_safety_rating_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>,2) as <string>;
+                                visible: bind $invert_boolean($is_empty_string($get_safety_rating_icon(template.ui-entry as <$BzResult>.object as <$BzEntry>,2) as <string>) as <bool>) as <bool>;
+                              }
+
+                            };
+                          }
+                        }
+
+                        Box {
+                          homogeneous: true;
+
+                          $BzContextTile formfactor_support_tile_wide {
+                            label: bind $get_formfactor_label(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly) as <string>;
+                            has-tooltip: true;
+                            tooltip-text: bind $get_formfactor_tooltip(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly) as <string>;
+                            clicked => $formfactor_cb(template);
+                            lozenge-style: "grey";
+
+                            lozenge-child: Box {
+                              Image {
+                                visible: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly as <bool>;
+                                icon-name: "device-support-adaptive-symbolic";
+                                pixel-size: 56;
+
+                                styles [
+                                  "wide-image",
+                                ]
+                              }
+
+                              Image {
+                                visible: bind $invert_boolean(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly) as <bool>;
+                                icon-name: "device-support-desktop-symbolic";
+                              }
+                            };
+                          }
+
+                          $BzContextTile formfactor_support_tile_narrow {
+                            label: bind $get_formfactor_label(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly) as <string>;
+                            has-tooltip: true;
+                            tooltip-text: bind $get_formfactor_tooltip(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly) as <string>;
+                            clicked => $formfactor_cb(template);
+                            lozenge-style: bind $bool_to_string(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly, "grey", "error") as <string>;
+                            visible: false;
+
+                            lozenge-child: Box {
+                              Image {
+                                visible: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly as <bool>;
+                                icon-name: "device-support-adaptive-symbolic";
+                                pixel-size: 56;
+
+                                styles [
+                                  "wide-image",
+                                ]
+                              }
+
+                              Image {
+                                visible: bind $invert_boolean(template.ui-entry as <$BzResult>.object as <$BzEntry>.is-mobile-friendly) as <bool>;
+                                icon-name: "device-support-desktop-symbolic";
+                              }
+                            };
+                          }
+
+                          $BzContextTile {
+                            clicked => $age_rating_cb(template);
+                            has-tooltip: true;
+                            tooltip-text: bind $get_age_rating_tooltip(template.ui-entry as <$BzResult>.object as <$BzEntry>.content-rating) as <string>;
+                            label: bind $get_age_rating_label(template.ui-entry as <$BzResult>.object as <$BzEntry>.content-rating) as <string>;
+                            lozenge-style: bind $get_age_rating_style(template.ui-entry as <$BzResult>.object as <$BzEntry>.content-rating) as <string>;
+
+                            lozenge-child: Label {
+                              label: bind $format_age_rating(template.ui-entry as <$BzResult>.object as <$BzEntry>.content-rating) as <string>;
+                              hexpand: true;
+                            };
+                          }
+
+                          $BzContextTile {
+                            can-target: bind $invert_boolean($is_null(template.ui-entry) as <bool>) as <bool>;
+                            sensitive: bind $invert_boolean($is_null(template.ui-entry as <$BzResult>.object as <$BzEntry>.recent-downloads) as <bool>) as <bool>;
+                            clicked => $dl_stats_cb(template);
+                            label: _("Downloads/Month");
+                            has-tooltip: bind $invert_boolean($is_null(template.ui-entry as <$BzResult>.object as <$BzEntry>.recent-downloads) as <bool>) as <bool>;
+                            tooltip-text: bind $format_recent_downloads_tooltip(template.ui-entry as <$BzResult>.object as <$BzEntry>.recent-downloads) as <string>;
+                            lozenge-style: "grey";
+
+                            lozenge-child: Label {
+                              justify: center;
+                              label: bind $format_recent_downloads(template.ui-entry as <$BzResult>.object as <$BzEntry>.recent-downloads) as <string>;
+                              halign: center;
+                              use-markup: true;
+                            };
+                          }
+                        }
+                        $BzInstallControls narrow_install_controls {
+                          wide: false;
+                          visible: false;
+                          margin-top: 6;
+                          entry-group: bind template.entry-group as <$BzEntryGroup>;
+                          state: bind template.state as <$BzStateInfo>;
+                          settings: bind template.state as <$BzStateInfo>.settings;
+                          update => $update_cb(template);
+                        }
+                      }
+
+                      Box {
+                        visible: bind $invert_boolean($is_null(template.entry-group as <$BzEntryGroup>.eol) as <bool>) as <bool>;
+                        orientation: vertical;
+                        spacing: 8;
+
+                        styles [
+                          "card",
+                          "colored",
+                          "warning",
+                        ]
+
+                        Label {
+                          label: _("Stopped Receiving Core Updates");
+                          margin-top: 8;
+                          margin-start: 8;
+                          margin-end: 8;
+                          wrap: true;
+                          wrap-mode: word_char;
+                          justify: center;
+
+                          styles [
+                            "title-4",
+                          ]
+                        }
+
+                        Label {
+                          label: _("This app uses a runtime that no longer receives updates or security fixes. It may become unsafe to use.");
+                          margin-bottom: 8;
+                          margin-start: 8;
+                          margin-end: 8;
+                          wrap: true;
+                          wrap-mode: word_char;
+                          justify: center;
+                        }
+                      }
+                    };
+                  }
+
+                  $BzScreenshotsCarousel screenshots {
+                    vexpand: true;
+                    hexpand: true;
+                    light-accent-color: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.light-accent-color;
+                    dark-accent-color: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.dark-accent-color;
+
+                    model: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.screenshot-paintables;
+                    captions: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.screenshot-captions;
+                  }
+
+                  Adw.Clamp {
+                    maximum-size: 910;
+                    tightening-threshold: 576;
+
+                    child: Box {
+                      orientation: vertical;
+
+                      Box bottom_box {
+                        orientation: vertical;
+                        valign: start;
+                        margin-start: 25;
+                        margin-end: 25;
+                        margin-bottom: 20;
+                        margin-top: 10;
+                        spacing: 15;
+
+                        Revealer {
+                          transition-type: slide_down;
+                          reveal-child: bind $logical_and(
+                              $logical_and($invert_boolean($is_zero(template.entry-group as <$BzEntryGroup>.user-data-size) as <bool>) as <bool>,$is_zero(template.entry-group as <$BzEntryGroup>.removable) as <bool>) as <bool>,
+                              $invert_boolean($is_zero(template.entry-group as <$BzEntryGroup>.installable-and-available) as <bool>) as <bool>
+                            ) as <bool>;
+                          visible: bind $invert_boolean($logical_and($is_zero(template.entry-group as <$BzEntryGroup>.removable) as <bool>, $is_zero(template.entry-group as <$BzEntryGroup>.installable) as <bool>) as <bool>) as <bool>;
+                          child: Box {
+                            height-request: 50;
+                            margin-bottom: 10;
+                            spacing: 12;
+
+                            styles [
+                              "card",
+                              "colored",
+                              "accent",
+                            ]
+
+                            Label {
+                              halign: start;
+                              valign: center;
+                              xalign: 0;
+                              hexpand: true;
+                              margin-start: 12;
+                              margin-top: 12;
+                              margin-bottom: 12;
+                              label: bind $format_leftover_label(template.ui-entry as <$BzResult>.object as <$BzEntry>.title, template.entry-group as <$BzEntryGroup>.user-data-size) as <string>;
+                              use-markup: true;
+                              wrap: true;
+                              wrap-mode: word_char;
+                              justify: left;
+                            }
+
+                            Button {
+                              valign: center;
+                              margin-end: 8;
+                              clicked => $delete_user_data_cb(template);
+
+                              child: Adw.ButtonContent {
+                                icon-name: "user-trash-symbolic";
+                                label: _("Trash Data");
+                              };
+                            }
+                          };
+                        }
+
+                        Box {
+                          spacing: 10;
+                          orientation: vertical;
+
+                          Label {
+                            styles [
+                              "title-2",
+                            ]
+
+                            valign: start;
+                            xalign: 0;
+                            wrap: true;
+                            wrap-mode: word_char;
+                            selectable: true;
+                            label: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.description;
+                          }
+
+                          $BzFadingClamp fading_clamp {
+                            max-height: bind $get_description_max_height(description_toggle.active) as <int>;
+                            min-max-height: 170;
+
+                            child: $BzAppstreamDescriptionRender {
+                              appstream-description: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.long-description;
+                            };
+                          }
+                        }
+
+                        ToggleButton description_toggle {
+                          styles [
+                            "circular",
+                          ]
+
+                          visible: bind fading_clamp.will-change;
+                          halign: center;
+
+                          child: Label {
+                            label: bind $get_description_toggle_text(description_toggle.active) as <string>;
+                            margin-start: 16;
+                            margin-end: 16;
+                          };
+                        }
+
+                        $BzReleasesList releases_list {
+                          version-history: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.version-history;
+                          installed-versions: bind template.entry-group as <$BzEntryGroup>.installed-versions;
+                        }
+
+                        Box {
+                          orientation: vertical;
+                          spacing: bind $choose(addons_more_btn.visible, 15, 3) as <int>;
+                          Box {
+                            orientation: vertical;
+                            visible: bind $invert_boolean($is_zero(addon_model.n-items) as <int>) as <bool>;
+
+                            Label {
+                              styles ["heading"]
+                              halign: start;
+                              label: _("Add-ons");
+                              margin-top: 5;
+                              margin-start: 3;
+                            }
+
+                            ListView {
+                              styles [
+                                "navigation-sidebar",
+                                "installed-list-view",
+                                "full-view-addons"
+                              ]
+                              overflow: visible;
+
+                              model: NoSelection addon_model {
+                                model: bind $get_addon_groups(template.entry-group);
+                              };
+
+                              factory: BuilderListItemFactory {
+                                template ListItem {
+                                  activatable: false;
+                                  selectable: false;
+                                  focusable: false;
+
+                                  child: $BzAddonTile {
+                                    group: bind template.item as <$BzEntryGroup>;
+                                    activated => $addon_tile_activated_cb();
+                                  };
+                                }
+                              };
+                            }
+
+                            Adw.PreferencesGroup addons_more_btn {
+                              visible: bind $should_show_addon_overflow(template.entry-group);
+
+                              Adw.ButtonRow {
+                                title: _("More Add-Ons");
+                                end-icon-name: "go-next-symbolic";
+                                activated => $install_addons_cb(template);
+                              }
+                            }
+                          }
+                          Box {
+                            orientation: vertical;
+
+                            Label {
+                              halign: start;
+                              label: _("Links");
+                              margin-top: 5;
+                              margin-bottom: 8;
+                              margin-start: 3;
+                              visible: bind $logical_and(
+                                  $invert_boolean($is_empty(template.ui-entry as <$BzResult>.object as <$BzEntry>.share-urls) as <bool>) as <bool>,
+                                  $invert_boolean($is_zero(addon_model.n-items) as <int>) as <bool>
+                                ) as <bool>;
+
+                              styles [
+                                "heading",
+                              ]
+                            }
+
+                            $BzShareList link_list {
+                              urls: bind template.ui-entry as <$BzResult>.object as <$BzEntry>.share-urls;
+                              dual-column: true;
+                            }
+                          }
+                        }
+
+                        Box {
+                          orientation: vertical;
+                          visible: bind $invert_boolean($is_zero(other_apps_model.n-items) as <int>) as <bool>;
+
+                          Label {
+                            styles [
+                              "heading",
+                              "h4",
+                            ]
+
+                            label: bind $format_other_apps_label(template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.developer) as <string>;
+                            xalign: 0;
+                            wrap: true;
+                            wrap-mode: word_char;
+                            margin-top: 5;
+                            margin-bottom: 8;
+                            margin-start: 3;
+                          }
+
+                          $BzDynamicListView {
+                            hexpand: true;
+                            scroll: false;
+                            noscroll-kind: flow-box;
+                            child-type: "BzAppTile";
+                            child-prop: "group";
+                            max-children-per-line: bind $get_dev_apps_max_children_per_line(other_apps_model.model) as <int>;
+                            bind-widget => $bind_app_tile_cb(template);
+                            unbind-widget => $unbind_app_tile_cb(template);
+
+                            model: SliceListModel other_apps_model {
+                              offset: 0;
+                              size: 6;
+                              model: bind $get_developer_apps_entries(template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.developer-apps, template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>) as <Gio.ListModel>;
+                            };
+                          }
+
+                          Button {
+                            visible: bind $is_longer(template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.developer-apps, 6) as <bool>;
+                            clicked => $more_apps_button_clicked_cb(template);
+                            halign: center;
+                            margin-top: 15;
+                            margin-bottom: 8;
+
+                            child: Label {
+                              label: bind $format_more_other_apps_label(template.entry-group as <$BzEntryGroup>.ui-entry as <$BzResult>.object as <$BzEntry>.developer) as <string>;
+                              justify: center;
+                              wrap: true;
+                              wrap-mode: word_char;
+                            };
+
+                            styles [
+                              "pill",
+                            ]
+                          }
+                        }
+                      }
+                    };
+                  }
+                };
+              };
+            };
+          };
+        };
+      }
+    };
+  };
+}

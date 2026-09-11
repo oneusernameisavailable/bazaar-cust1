@@ -1,0 +1,13 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.test.G1" : "New",
+    "org.test.T1" : "New"
+  },
+  "noncore" : {
+    "systems.fracture.launcher" : []
+  },
+  "noncore_label_names" : [
+    "test"
+  ]
+}

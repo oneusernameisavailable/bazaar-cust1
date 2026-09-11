@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/kolunmi/Bazaar">
+    <file>cz-custom-page.ui</file>
+  </gresource>
+</gresources>

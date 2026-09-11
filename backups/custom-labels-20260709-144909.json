@@ -1,0 +1,10 @@
+{
+  "version" : 1,
+  "core" : {
+    "org.test.App1" : "Discarded",
+    "org.test.App3" : "New",
+    "org.test.App2" : "New"
+  },
+  "noncore" : {  },
+  "noncore_label_names" : []
+}

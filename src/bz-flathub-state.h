@@ -21,6 +21,7 @@
 #pragma once
 
 #include <gtk/gtk.h>
+#include <gio/gio.h>
 
 #include "bz-application-map-factory.h"
 #include "bz-entry-group.h"
@@ -31,7 +32,8 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (BzFlathubState, bz_flathub_state, BZ, FLATHUB_STATE, GObject)
 
 BzFlathubState *
-bz_flathub_state_new (void);
+bz_flathub_state_new (GSettings   *settings,
+                       gboolean     first_run);
 
 DexFuture *
 bz_flathub_state_set_for_day (BzFlathubState *self,

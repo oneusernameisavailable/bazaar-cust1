@@ -1264,7 +1264,7 @@ init_fiber (GWeakRef *wr)
                   g_clear_error (&local_error);
                 }
 
-              flathub = bz_flathub_state_new ();
+              flathub = bz_flathub_state_new (self->settings, FALSE);
               result  = bz_serializable_deserialize (
                   BZ_SERIALIZABLE (flathub), variant, &local_error);
               if (result)
@@ -4086,7 +4086,7 @@ make_sync_future (BzApplication *self)
       bz_track_weak (self), bz_weak_release);
 
   g_clear_object (&self->tmp_flathub);
-  self->tmp_flathub = bz_flathub_state_new ();
+  self->tmp_flathub = bz_flathub_state_new (self->settings, !self->had_cache_on_init);
   flathub_future    = bz_flathub_state_update_to_today (self->tmp_flathub);
   flathub_future    = dex_future_finally (
       flathub_future,
