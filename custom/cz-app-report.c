@@ -31,8 +31,6 @@
 #include "bz-flathub-state.h"
 #include "cz-custom-filter.h"
 
-#define CZ_APP_REPORT_RETENTION 50u
-
 typedef struct
 {
   char       *display_name;

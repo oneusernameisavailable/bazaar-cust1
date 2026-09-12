@@ -142,7 +142,6 @@ test_generate_writes_all_rows (Fixture *fix,
   g_autofree char *expected  = NULL;
   gsize            len       = 0;
   gchar          **lines     = NULL;
-  guint            i;
 
   /* Seed a few labels + one full review and one partial review. */
   g_assert_true (bz_label_store_set_core_label (fix->store, "org.test.App1", "4-Stars", NULL));
@@ -285,7 +284,6 @@ test_review_store_roundtrip (Fixture *fix,
   g_autofree char *usa = NULL;
   g_autofree char *fea = NULL;
   g_autofree char *iss = NULL;
-  BzLabelStore    *reopened;
   gboolean         found;
 
   /* Full review roundtrip. */

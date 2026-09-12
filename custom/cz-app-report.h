@@ -21,6 +21,8 @@
 
 G_BEGIN_DECLS
 
+#define CZ_APP_REPORT_RETENTION 50u
+
 char *
 cz_app_report_suggest_path (const char *db_path);
 

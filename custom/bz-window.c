@@ -48,7 +48,14 @@
 #include "bz-user-data-page.h"
 #include "bz-util.h"
 #include "bz-window.h"
+#include "cz-app-report.h"
 #include "cz-custom-label-store.h"
+
+enum
+{
+  NAV_VIEW_ROOT = 0,
+  NAV_VIEW_LABELS = 1,
+};
 
 struct _BzWindow
 {
@@ -79,6 +86,7 @@ struct _BzWindow
   GtkWindow               *custom_nav_popup;
   gboolean                 popup_visible;
   gboolean                 rebuilding_popup;
+  guint                    current_nav_view; /* 0 = root menu, 1 = label manager */
   BzNoncoreNameAddedFunc   noncore_name_added_cb;
   BzNoncoreNameRemovedFunc noncore_name_removed_cb;
   gpointer                 noncore_name_cb_data;
@@ -1077,10 +1085,116 @@ compare_names (gconstpointer a, gconstpointer b)
   return g_strcmp0 (*(const char **) a, *(const char **) b);
 }
 
+/* ---- Nav root menu -------------------------------------------------- */
+
 static void
-rebuild_custom_nav_popup (BzWindow *self)
+on_nav_labels_clicked (GtkButton *button,
+                       BzWindow  *self)
+{
+  (void) button;
+  self->current_nav_view = NAV_VIEW_LABELS;
+  rebuild_custom_nav_popup (self);
+}
+
+static void
+on_nav_back_clicked (GtkButton *button,
+                     BzWindow  *self)
+{
+  (void) button;
+  self->current_nav_view = NAV_VIEW_ROOT;
+  rebuild_custom_nav_popup (self);
+}
+
+static void
+on_nav_report_clicked (GtkButton *button,
+                       BzWindow  *self)
+{
+  g_autoptr (GError) err = NULL;
+  char              *path = NULL;
+  char              *reports_dir = NULL;
+
+  (void) button;
+
+  if (self->label_store == NULL)
+    {
+      adw_toast_overlay_add_toast (
+          self->toasts, adw_toast_new (_ ("Label store unavailable")));
+      self->popup_visible = FALSE;
+      gtk_widget_set_visible (GTK_WIDGET (self->custom_nav_popup), FALSE);
+      return;
+    }
+
+  path = cz_app_report_suggest_path (self->db_path);
+  if (!cz_app_report_generate (self->label_store, self->state, path, &err))
+    {
+      adw_toast_overlay_add_toast (
+          self->toasts, adw_toast_new (err->message));
+      g_free (path);
+      self->popup_visible = FALSE;
+      gtk_widget_set_visible (GTK_WIDGET (self->custom_nav_popup), FALSE);
+      return;
+    }
+
+  reports_dir = g_path_get_dirname (path);
+  cz_app_report_prune (reports_dir, CZ_APP_REPORT_RETENTION);
+  g_free (reports_dir);
+  g_free (path);
+
+  adw_toast_overlay_add_toast (
+      self->toasts, adw_toast_new (_ ("App report exported")));
+  self->popup_visible = FALSE;
+  gtk_widget_set_visible (GTK_WIDGET (self->custom_nav_popup), FALSE);
+}
+
+static void
+rebuild_custom_nav_root_view (BzWindow *self)
 {
   GtkWidget *box;
+  GtkWidget *btn;
+  GtkWidget *item_label;
+
+  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_margin_start (box, 4);
+  gtk_widget_set_margin_end (box, 4);
+  gtk_widget_set_margin_top (box, 4);
+  gtk_widget_set_margin_bottom (box, 4);
+  gtk_widget_set_size_request (box, 280, -1);
+
+  /* Label creator */
+  btn = gtk_button_new ();
+  gtk_widget_add_css_class (btn, "menu-item");
+  item_label = gtk_label_new (_ ("Label creator"));
+  gtk_widget_set_halign (item_label, GTK_ALIGN_START);
+  gtk_widget_set_hexpand (item_label, TRUE);
+  gtk_button_set_child (GTK_BUTTON (btn), item_label);
+  g_signal_connect (btn, "clicked",
+                    G_CALLBACK (on_nav_labels_clicked), self);
+  gtk_box_append (GTK_BOX (box), btn);
+
+  /* App Report */
+  btn = gtk_button_new ();
+  gtk_widget_add_css_class (btn, "menu-item");
+  item_label = gtk_label_new (_ ("App Report"));
+  gtk_widget_set_halign (item_label, GTK_ALIGN_START);
+  gtk_widget_set_hexpand (item_label, TRUE);
+  gtk_button_set_child (GTK_BUTTON (btn), item_label);
+  g_signal_connect (btn, "clicked",
+                    G_CALLBACK (on_nav_report_clicked), self);
+  gtk_box_append (GTK_BOX (box), btn);
+
+  self->rebuilding_popup = TRUE;
+  gtk_window_set_child (self->custom_nav_popup, box);
+  self->rebuilding_popup = FALSE;
+}
+
+/* ---- Label name manager --------------------------------------------- */
+
+static void
+rebuild_custom_nav_labels_view (BzWindow *self)
+{
+  GtkWidget *box;
+  GtkWidget *back_btn;
+  GtkWidget *back_label;
   GtkWidget *entry;
   GtkWidget *add_btn;
   GtkWidget *hbox;
@@ -1096,6 +1210,16 @@ rebuild_custom_nav_popup (BzWindow *self)
   gtk_widget_set_margin_top (box, 8);
   gtk_widget_set_margin_bottom (box, 8);
   gtk_widget_set_size_request (box, 280, -1);
+
+  /* Back to the root menu */
+  back_btn = gtk_button_new ();
+  gtk_widget_add_css_class (back_btn, "menu-item");
+  back_label = gtk_label_new (_ ("← Back"));
+  gtk_widget_set_halign (back_label, GTK_ALIGN_START);
+  gtk_button_set_child (GTK_BUTTON (back_btn), back_label);
+  g_signal_connect (back_btn, "clicked",
+                    G_CALLBACK (on_nav_back_clicked), self);
+  gtk_box_append (GTK_BOX (box), back_btn);
 
   /* Entry + Add button row */
   hbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
@@ -1212,6 +1336,15 @@ rebuild_custom_nav_popup (BzWindow *self)
 }
 
 static void
+rebuild_custom_nav_popup (BzWindow *self)
+{
+  if (self->current_nav_view == NAV_VIEW_LABELS)
+    rebuild_custom_nav_labels_view (self);
+  else
+    rebuild_custom_nav_root_view (self);
+}
+
+static void
 on_view_stack_visible_child_changed (BzWindow   *self,
                                      GParamSpec *pspec,
                                      gpointer    user_data)
@@ -1277,6 +1410,7 @@ on_custom_nav_button_clicked (GtkButton *button,
     }
   else
     {
+      self->current_nav_view = NAV_VIEW_ROOT;
       rebuild_custom_nav_popup (self);
       self->popup_visible = TRUE;
       gtk_widget_set_visible (GTK_WIDGET (self->custom_nav_popup), TRUE);
