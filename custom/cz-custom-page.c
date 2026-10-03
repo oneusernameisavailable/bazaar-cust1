@@ -22,6 +22,8 @@
 
 #include "cz-custom-page.h"
 
+#include "cz-paths.h"
+
 #include <glib/gi18n.h>
 
 #include "bz-app-tile.h"
@@ -1298,14 +1300,7 @@ cz_custom_page_constructed (GObject *object)
     return;
 
   /* Create label store and try loading from disk */
-  {
-    const char *data_dir = g_get_user_data_dir ();
-    const char *app_id   = "io.github.kolunmi.Bazaar";
-
-    if (data_dir != NULL)
-      self->label_store_path = g_build_filename (
-          data_dir, app_id, "custom-labels.db", NULL);
-  }
+  self->label_store_path = cz_labels_db_path ();
 
   self->label_store = cz_custom_label_store_new ();
   if (self->label_store_path != NULL)

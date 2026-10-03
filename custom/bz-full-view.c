@@ -20,6 +20,8 @@
 
 #define G_LOG_DOMAIN "BAZAAR::FULL-VIEW-WIDGET"
 
+#include "cz-paths.h"
+
 #include <glib/gi18n.h>
 
 #include "bz-addon-tile.h"
@@ -1652,14 +1654,13 @@ bz_full_view_init (BzFullView *self)
   self->core_label_names    = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                       g_free, NULL);
   {
-    char *data_dir = g_build_filename (g_get_user_data_dir (),
-                                       "io.github.kolunmi.Bazaar",
-                                       NULL);
-    char *db_path  = g_build_filename (data_dir, "custom-labels.db", NULL);
+    g_autofree char *data_dir = cz_user_data_dir ();
+    g_autofree char *db_path  = cz_labels_db_path ();
+
+    if (data_dir == NULL || db_path == NULL)
+      return;
 
     self->label_store = bz_label_store_open (db_path, data_dir, NULL);
-    g_free (db_path);
-    g_free (data_dir);
   }
   /* Use default label if store missing — load_label_maps handles it */
   load_label_maps (self);

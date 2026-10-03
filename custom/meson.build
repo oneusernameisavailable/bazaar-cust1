@@ -175,6 +175,7 @@ bz_sources = files(
   'cz-custom-page.c',
   'cz-custom-filter.c',
   'cz-custom-label-store.c',
+  'cz-paths.c',
 )
 subdir('progress-bar-designs')
 

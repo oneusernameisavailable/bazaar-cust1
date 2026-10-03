@@ -23,6 +23,8 @@
 
 #include <gio/gio.h>
 
+#include "cz-paths.h"
+
 #include <glib/gi18n.h>
 
 #include "bz-addons-dialog.h"
@@ -1602,10 +1604,7 @@ on_select_backup_clicked (AdwAlertDialog *alert,
   g_list_store_append (filters, filter);
   gtk_file_dialog_set_filters (file_dialog, G_LIST_MODEL (filters));
 
-  backup_dir = g_build_filename (g_get_user_data_dir (),
-                                 "io.github.kolunmi.Bazaar",
-                                 "backups",
-                                 NULL);
+  backup_dir = cz_backups_dir ();
   {
     g_autoptr (GFile) initial = g_file_new_for_path (backup_dir);
     gtk_file_dialog_set_initial_folder (file_dialog, initial);
@@ -1718,13 +1717,16 @@ bz_window_init (BzWindow *self)
 
   /* Custom nav (non-core label management) */
   {
-    char *data_dir = g_build_filename (g_get_user_data_dir (),
-                                       "io.github.kolunmi.Bazaar",
-                                       NULL);
-    self->db_path = g_build_filename (data_dir, "custom-labels.db", NULL);
+    g_autofree char *data_dir = cz_user_data_dir ();
+
+    if (data_dir == NULL)
+      return;
+
+    self->db_path = cz_labels_db_path ();
+    if (self->db_path == NULL)
+      return;
 
     self->label_store = bz_label_store_open (self->db_path, data_dir, NULL);
-    g_free (data_dir);
 
     if (self->label_store != NULL)
       {

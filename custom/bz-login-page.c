@@ -18,6 +18,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "cz-paths.h"
+
 #include <glib/gi18n.h>
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
@@ -76,13 +78,25 @@ get_shared_network_session (void)
       g_autofree char *data_dir                = NULL;
       g_autoptr (WebKitNetworkSession) session = NULL;
 
-      data_dir = g_build_filename (g_get_user_data_dir (),
-                                   "io.github.kolunmi.Bazaar",
-                                   "webkit-data",
-                                   NULL);
-      session  = webkit_network_session_new (data_dir, NULL);
+      {
+        g_autofree char *base = cz_user_data_dir ();
 
-      g_once_init_leave (&shared_session, g_steal_pointer (&session));
+        data_dir = base != NULL
+                     ? g_build_filename (base, "webkit-data", NULL)
+                     : NULL;
+
+        if (data_dir == NULL)
+          {
+            /* Leave shared_session NULL so g_once_init_enter() retries on
+             * the next call rather than caching a half-initialised value. */
+            g_once_init_leave (&shared_session, NULL);
+            return NULL;
+          }
+
+        session = webkit_network_session_new (data_dir, NULL);
+
+        g_once_init_leave (&shared_session, g_steal_pointer (&session));
+      }
     }
 
   return shared_session;

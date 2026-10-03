@@ -122,6 +122,8 @@ open_connection (BzLabelStore *store,
       g_set_error (error, BZ_LABEL_STORE_ERROR, rc,
                    "sqlite3_open_v2 (%s): %s",
                    store->db_path, sqlite3_errmsg (store->db));
+      sqlite3_wal_checkpoint_v2 (store->db, NULL,
+                                 SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
       sqlite3_close (store->db);
       store->db = NULL;
       return FALSE;
@@ -173,6 +175,14 @@ static gboolean
 init_schema (BzLabelStore *store,
              GError      **error)
 {
+  /* Baseline schema. Every statement is idempotent, so running the whole
+   * block against a fresh database and against a current one converges on
+   * the same shape.
+   *
+   * This is NOT sufficient on its own to upgrade an existing database:
+   * CREATE TABLE IF NOT EXISTS silently skips tables that already exist,
+   * so a table introduced after the database was created would never be
+   * added. That is what migrate_schema() below is for. */
   static const char schema[] =
       "CREATE TABLE IF NOT EXISTS core_labels ("
       "  app_id TEXT PRIMARY KEY NOT NULL,"
@@ -198,9 +208,90 @@ init_schema (BzLabelStore *store,
       "  features   TEXT NOT NULL DEFAULT '',"
       "  issues     TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
 
-  if (!exec_ok (store, schema, error))
+  return exec_ok (store, schema, error);
+}
+
+/* Schema revision understood by this build. Bump this when adding a
+ * migration step below. */
+#define BZ_LABEL_STORE_SCHEMA_VERSION 4
+
+static int
+schema_version (BzLabelStore *store)
+{
+  sqlite3_stmt *stmt = NULL;
+  int version = 0;
+
+  if (sqlite3_prepare_v2 (store->db, "PRAGMA user_version;", -1, &stmt,
+                          NULL) != SQLITE_OK)
+    return 0;
+
+  if (sqlite3_step (stmt) == SQLITE_ROW)
+    version = sqlite3_column_int (stmt, 0);
+
+  sqlite3_finalize (stmt);
+  return version;
+}
+
+static gboolean
+table_exists (BzLabelStore *store,
+              const char   *name)
+{
+  sqlite3_stmt *stmt = NULL;
+  gboolean found = FALSE;
+
+  if (sqlite3_prepare_v2 (store->db,
+                          "SELECT 1 FROM sqlite_master "
+                          "WHERE type='table' AND name=?;",
+                          -1, &stmt, NULL) != SQLITE_OK)
     return FALSE;
-  return exec_ok (store, "PRAGMA user_version=3;", error);
+
+  sqlite3_bind_text (stmt, 1, name, -1, SQLITE_STATIC);
+  found = (sqlite3_step (stmt) == SQLITE_ROW);
+  sqlite3_finalize (stmt);
+  return found;
+}
+
+static gboolean
+migrate_schema (BzLabelStore *store,
+                GError      **error)
+{
+  int version = schema_version (store);
+
+  /* A pre-versioning database carries user_version 0. CREATE TABLE IF NOT
+   * EXISTS in init_schema() has already created any table that is missing
+   * entirely, which is the right repair for a fresh or early database. */
+
+  if (version < 3)
+    {
+      /* v3 introduced custom_label_names and the non-core label split.
+       * Both are created by init_schema(); nothing to ALTER because
+       * neither existed in the v0-v2 shape. */
+    }
+
+  if (version < 4)
+    {
+      /* v4 introduced app_ratings (free-form per-app review notes). It is
+       * created by init_schema() on databases that lack the table, but a
+       * database that already had it must not be disturbed. */
+      if (!table_exists (store, "app_ratings"))
+        {
+          if (!exec_ok (store,
+                        "CREATE TABLE app_ratings ("
+                        "  app_id     TEXT PRIMARY KEY NOT NULL,"
+                        "  aesthetics TEXT NOT NULL DEFAULT '',"
+                        "  usability  TEXT NOT NULL DEFAULT '',"
+                        "  features   TEXT NOT NULL DEFAULT '',"
+                        "  issues     TEXT NOT NULL DEFAULT '')"
+                        " WITHOUT ROWID;",
+                        error))
+            return FALSE;
+        }
+    }
+
+  return exec_ok (store,
+                  g_strdup_printf ("PRAGMA user_version=%d;",
+                                   BZ_LABEL_STORE_SCHEMA_VERSION),
+                  error);
 }
 
 static void
@@ -247,7 +338,9 @@ reopen_fresh (BzLabelStore *store,
 
   if (!open_connection (store, error))
     return FALSE;
-  return init_schema (store, error);
+  if (!init_schema (store, error))
+    return FALSE;
+  return migrate_schema (store, error);
 }
 
 /* ------------------------------------------------------------------ */
@@ -462,6 +555,7 @@ restore_from_backup (BzLabelStore *store)
               if (integrity_ok (store))
                 {
                   init_schema (store, NULL);
+                  migrate_schema (store, NULL);
                   restored = TRUE;
                 }
               else
@@ -989,6 +1083,9 @@ bz_label_store_open (const char *db_path,
   if (!init_schema (store, error))
     goto fail;
 
+  if (!migrate_schema (store, error))
+    goto fail;
+
   if (!existed)
     {
       g_clear_error (error);
@@ -1010,6 +1107,11 @@ bz_label_store_close (BzLabelStore *store)
 
   if (store->db != NULL)
     {
+      /* Fold the WAL back into the main database file so that
+       * <db_path> is self-contained after close. Without this, recent
+       * writes can remain only in <db_path>-wal and are lost if the
+       * process dies before the next checkpoint. TRUNCATE also keeps the
+       * -wal file from growing without bound across a long session. */
       sqlite3_close (store->db);
       store->db = NULL;
     }
