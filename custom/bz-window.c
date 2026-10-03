@@ -50,6 +50,7 @@
 #include "bz-window.h"
 #include "cz-app-report.h"
 #include "cz-custom-label-store.h"
+#include "cz-custom-page.h"
 
 enum
 {
@@ -81,15 +82,12 @@ struct _BzWindow
   GtkButton          *custom_nav_button;
 
   /* Non-core label management (custom tab hamburger) */
-  GHashTable              *local_noncore_names; /* set of noncore label names */
-  BzLabelStore            *label_store;
-  GtkWindow               *custom_nav_popup;
-  gboolean                 popup_visible;
-  gboolean                 rebuilding_popup;
-  guint                    current_nav_view; /* 0 = root menu, 1 = label manager */
-  BzNoncoreNameAddedFunc   noncore_name_added_cb;
-  BzNoncoreNameRemovedFunc noncore_name_removed_cb;
-  gpointer                 noncore_name_cb_data;
+  CzCustomLabelStore    *custom_label_store; /* shared per-category store (strong ref) */
+  BzLabelStore          *label_store;
+  GtkWindow             *custom_nav_popup;
+  gboolean               popup_visible;
+  gboolean               rebuilding_popup;
+  guint                  current_nav_view; /* 0 = root menu, 1 = label manager */
 
   /* Empty DB recovery */
   gboolean   db_empty;
@@ -187,7 +185,7 @@ bz_window_dispose (GObject *object)
   BzWindow *self = BZ_WINDOW (object);
 
   g_clear_object (&self->state);
-  g_clear_pointer (&self->local_noncore_names, g_hash_table_unref);
+  g_clear_object (&self->custom_label_store);
   g_clear_pointer (&self->label_store, bz_label_store_destroy);
   if (self->custom_nav_popup != NULL)
     {
@@ -840,45 +838,62 @@ key_pressed (BzWindow              *self,
     }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Custom nav (non-core label management)                              */
-/* ------------------------------------------------------------------ */
-
 static void
-custom_nav_load_names (BzWindow *self)
+on_custom_nav_add_clicked (GtkEntry *, gpointer);
+static void rebuild_custom_nav_popup (BzWindow *);
+
+/* The shared per-category store the window's label manager reads/writes.
+ * Set by bz_window_set_custom_label_store() from the custom page's store. */
+static CzCustomLabelStore *
+nav_store (BzWindow *self)
 {
-  char **names;
-  guint  i;
-
-  if (self->label_store == NULL)
-    return;
-
-  names = bz_label_store_get_all_label_names (self->label_store);
-  if (names == NULL)
-    return;
-
-  for (i = 0; names[i] != NULL; i++)
-    g_hash_table_add (self->local_noncore_names, g_strdup (names[i]));
-  g_strfreev (names);
+  return self->custom_label_store;
 }
 
-/* Forward declarations */
-/* Forward declarations */
-
-static void on_custom_nav_add_clicked (GtkEntry *, gpointer);
-static void rebuild_custom_nav_popup (BzWindow *);
-void        bz_full_view_update_noncore_label_names (BzFullView *, GPtrArray *);
-
-/* Check how many apps have a given noncore label assigned.
- * Returns 0 if store is unavailable or label isn't used. */
-static guint
-noncore_label_assignment_count (BzWindow   *self,
-                                const char *label)
+/* Internal name of the category currently selected on the custom page, or
+ * NULL when no category is selected yet.  The caller frees the result. */
+static char *
+nav_active_category_name (BzWindow *self)
 {
-  if (self->label_store == NULL)
+  GtkWidget *page;
+
+  if (self->main_view_stack == NULL)
+    return NULL;
+
+  page = adw_view_stack_get_child_by_name (self->main_view_stack, "custom");
+  if (!CZ_IS_CUSTOM_PAGE (page))
+    return NULL;
+
+  return cz_custom_page_get_active_category_name (CZ_CUSTOM_PAGE (page));
+}
+
+/* How many apps are assigned @label inside @category.
+ * Returns 0 if the store is unavailable or the label isn't used. */
+static guint
+nav_assignment_count (BzWindow   *self,
+                      const char *category,
+                      const char *label)
+{
+  if (self->custom_label_store == NULL || category == NULL)
     return 0;
 
-  return bz_label_store_count_noncore_label (self->label_store, label);
+  return cz_custom_label_store_count_category_label_assignments (
+      self->custom_label_store, category, label);
+}
+
+/* Delete @name from @category through the facade.  The store emits "changed",
+ * which rebuilds the custom page's pills and the full-view popover. */
+static void
+nav_remove_name (BzWindow   *self,
+                 const char *category,
+                 const char *name)
+{
+  if (self->custom_label_store == NULL)
+    return;
+
+  cz_custom_label_store_remove_category_label_name (
+      self->custom_label_store, category, name);
+  rebuild_custom_nav_popup (self);
 }
 
 /* Response callback for the delete-confirmation dialog. */
@@ -891,38 +906,21 @@ on_delete_confirm_response (GObject      *source,
   GtkAlertDialog *dialog = GTK_ALERT_DIALOG (source);
   int             response;
   const char     *name;
+  const char     *category;
 
   response = gtk_alert_dialog_choose_finish (dialog, result, NULL);
   if (response != 1) /* "_Delete anyway" button index */
     return;
 
-  name = (const char *) g_object_get_data (G_OBJECT (dialog), "noncore-name");
-  if (name == NULL)
+  name     = (const char *) g_object_get_data (G_OBJECT (dialog), "noncore-name");
+  category = (const char *) g_object_get_data (G_OBJECT (dialog), "noncore-category");
+  if (name == NULL || category == NULL)
     return;
 
-  g_hash_table_remove (self->local_noncore_names, name);
-  bz_label_store_remove_label_name (self->label_store, name, NULL);
-
-  /* Notify custom-label store so pills rebuild in real time */
-  if (self->noncore_name_removed_cb != NULL)
-    self->noncore_name_removed_cb (name, self->noncore_name_cb_data);
-
-  /* Sync the full-view so its noncore popover reflects the change.
-     Use the in-memory label list from the custom label store to avoid
-     SQLite cross-connection visibility issues. */
-  if (BZ_IS_FULL_VIEW (self->full_view) && self->noncore_name_cb_data != NULL)
-    {
-      CzCustomLabelStore *store     = CZ_CUSTOM_LABEL_STORE (self->noncore_name_cb_data);
-      GPtrArray          *names_ptr = cz_custom_label_store_get_all_noncore_label_names (store);
-      if (names_ptr != NULL)
-        {
-          bz_full_view_update_custom_label_names (self->full_view, names_ptr);
-        }
-    }
-
-  rebuild_custom_nav_popup (self);
+  nav_remove_name (self, category, name);
 
   g_object_set_data (G_OBJECT (dialog), "noncore-name", NULL);
+  g_object_set_data (G_OBJECT (dialog), "noncore-category", NULL);
 }
 
 static void
@@ -931,13 +929,15 @@ on_custom_nav_delete_clicked (GtkButton *button,
 {
   BzWindow   *self = BZ_WINDOW (user_data);
   const char *name;
+  const char *category;
   guint       n;
 
-  name = (const char *) g_object_get_data (G_OBJECT (button), "noncore-name");
-  if (name == NULL)
+  name     = (const char *) g_object_get_data (G_OBJECT (button), "noncore-name");
+  category = (const char *) g_object_get_data (G_OBJECT (button), "noncore-category");
+  if (name == NULL || category == NULL)
     return;
 
-  n = noncore_label_assignment_count (self, name);
+  n = nav_assignment_count (self, category, name);
 
   if (n > 0)
     {
@@ -954,6 +954,8 @@ on_custom_nav_delete_clicked (GtkButton *button,
 
       g_object_set_data_full (G_OBJECT (dialog), "noncore-name",
                               g_strdup (name), g_free);
+      g_object_set_data_full (G_OBJECT (dialog), "noncore-category",
+                              g_strdup (category), g_free);
 
       gtk_alert_dialog_set_buttons (dialog, btn);
       gtk_alert_dialog_set_cancel_button (dialog, 0);
@@ -966,40 +968,8 @@ on_custom_nav_delete_clicked (GtkButton *button,
       return;
     }
 
-  /* No apps use this label — delete directly.
-     Save a copy of name before removing from hash, because
-     local_noncore_names uses g_free as key destroy, so
-     g_hash_table_remove frees the key pointer. */
-  {
-    g_autofree char *saved_name = g_strdup (name);
-
-    g_hash_table_remove (self->local_noncore_names, name);
-
-    {
-      g_autoptr (GError) err = NULL;
-      if (!bz_label_store_remove_label_name (self->label_store, saved_name, &err))
-        {
-          g_critical ("Failed to remove label name from store: %s", err->message);
-          g_hash_table_add (self->local_noncore_names, g_strdup (saved_name));
-          return;
-        }
-    }
-
-    /* Notify custom-label store so pills rebuild in real time */
-    if (self->noncore_name_removed_cb != NULL)
-      self->noncore_name_removed_cb (saved_name, self->noncore_name_cb_data);
-
-    /* Sync the full-view so its noncore popover reflects the change. */
-    if (BZ_IS_FULL_VIEW (self->full_view) && self->noncore_name_cb_data != NULL)
-      {
-        CzCustomLabelStore *store     = CZ_CUSTOM_LABEL_STORE (self->noncore_name_cb_data);
-        GPtrArray          *names_ptr = cz_custom_label_store_get_all_noncore_label_names (store);
-        if (names_ptr != NULL)
-          bz_full_view_update_custom_label_names (self->full_view, names_ptr);
-      }
-
-    rebuild_custom_nav_popup (self);
-  }
+  /* No apps use this label — delete directly. */
+  nav_remove_name (self, category, name);
 }
 
 static void
@@ -1015,14 +985,19 @@ static void
 on_custom_nav_add_clicked (GtkEntry *entry,
                            gpointer  user_data)
 {
-  BzWindow   *self = BZ_WINDOW (user_data);
-  const char *text;
+  BzWindow        *self  = BZ_WINDOW (user_data);
+  const char      *text;
+  g_autofree char *category = NULL;
 
   text = gtk_editable_get_text (GTK_EDITABLE (entry));
   if (text == NULL || *text == '\0')
     return;
 
-  if (g_hash_table_contains (self->local_noncore_names, text))
+  if (self->custom_label_store == NULL)
+    return;
+
+  category = nav_active_category_name (self);
+  if (category == NULL)
     return;
 
   /* Copy the text before clearing the entry, because
@@ -1031,34 +1006,13 @@ on_custom_nav_add_clicked (GtkEntry *entry,
   {
     char *label_name = g_strdup (text);
 
-    g_hash_table_add (self->local_noncore_names, g_strdup (label_name));
     gtk_editable_set_text (GTK_EDITABLE (entry), "");
-    {
-      g_autoptr (GError) err = NULL;
-      if (!bz_label_store_add_label_name (self->label_store, label_name, &err))
-        {
-          g_critical ("Failed to add label name to store: %s", err->message);
-          g_hash_table_remove (self->local_noncore_names, label_name);
-          g_free (label_name);
-          return;
-        }
-    }
 
-    /* Notify custom-label store so pills rebuild in real time */
-    if (self->noncore_name_added_cb != NULL)
-      self->noncore_name_added_cb (label_name, self->noncore_name_cb_data);
-
-    /* Sync the full-view so its noncore popover reflects the new name.
-       Use the in-memory label list from the custom label store to avoid
-       SQLite cross-connection visibility issues. */
-    if (BZ_IS_FULL_VIEW (self->full_view) && self->noncore_name_cb_data != NULL)
-      {
-        CzCustomLabelStore *store     = CZ_CUSTOM_LABEL_STORE (self->noncore_name_cb_data);
-        GPtrArray          *names_ptr = cz_custom_label_store_get_all_noncore_label_names (store);
-        if (names_ptr != NULL)
-          {
-            bz_full_view_update_custom_label_names (self->full_view, names_ptr);
-          }
+    if (!cz_custom_label_store_add_category_label_name (
+            self->custom_label_store, category, label_name))
+      { /* Duplicate name in this category — keep the entry focused. */
+        g_free (label_name);
+        return;
       }
 
     /* Rebuild the popup content to show the new name in the list */
@@ -1106,6 +1060,43 @@ on_nav_back_clicked (GtkButton *button,
 }
 
 static void
+on_report_dialog_response (AdwAlertDialog *alert,
+                           const char     *response,
+                           gpointer        user_data)
+{
+  BzWindow         *self = BZ_WINDOW (user_data);
+  g_autoptr (GError) err  = NULL;
+  g_autoptr (GFile) file  = NULL;
+  g_autofree char  *uri   = NULL;
+  g_autofree char  *dir   = NULL;
+  const char       *path  = NULL;
+  const char       *launch_path = NULL;
+
+  g_debug ("[DIAG] on_report_dialog_response: response=%s", response);
+
+  path = g_object_get_data (G_OBJECT (alert), "report-path");
+  if (path == NULL)
+    return;
+
+  if (g_strcmp0 (response, "open") == 0)
+    launch_path = path;
+  else if (g_strcmp0 (response, "open-folder") == 0)
+    launch_path = dir = g_path_get_dirname (path);
+  else
+    return;
+
+  file = g_file_new_for_path (launch_path);
+  uri  = g_file_get_uri (file);
+  if (!g_app_info_launch_default_for_uri (uri, NULL, &err))
+    {
+      g_debug ("[DIAG] on_report_dialog_response: launch failed: %s",
+               err->message);
+      adw_toast_overlay_add_toast (
+          self->toasts, adw_toast_new (err->message));
+    }
+}
+
+static void
 on_nav_report_clicked (GtkButton *button,
                        BzWindow  *self)
 {
@@ -1138,12 +1129,35 @@ on_nav_report_clicked (GtkButton *button,
   reports_dir = g_path_get_dirname (path);
   cz_app_report_prune (reports_dir, CZ_APP_REPORT_RETENTION);
   g_free (reports_dir);
-  g_free (path);
 
-  adw_toast_overlay_add_toast (
-      self->toasts, adw_toast_new (_ ("App report exported")));
+  {
+    AdwAlertDialog  *alert;
+    g_autofree char *body = NULL;
+    g_autofree char *basename = NULL;
+
+    basename = g_path_get_basename (path);
+    body     = g_strdup_printf (_ ("File: %s"), basename);
+
+    alert = g_object_ref_sink (ADW_ALERT_DIALOG (adw_alert_dialog_new (
+        _ ("App report exported"), body)));
+
+    g_object_set_data_full (G_OBJECT (alert), "report-path",
+                            g_strdup (path), g_free);
+    adw_alert_dialog_add_responses (alert,
+                                    "open", _ ("_Open"),
+                                    "open-folder", _ ("Open _Folder"),
+                                    "cancel", _ ("_Cancel"),
+                                    NULL);
+    adw_alert_dialog_set_close_response (alert, "cancel");
+    g_signal_connect (alert, "response",
+                      G_CALLBACK (on_report_dialog_response), self);
+
+    adw_dialog_present (ADW_DIALOG (alert), GTK_WIDGET (self));
+  }
+
   self->popup_visible = FALSE;
   gtk_widget_set_visible (GTK_WIDGET (self->custom_nav_popup), FALSE);
+  g_free (path);
 }
 
 static void
@@ -1192,17 +1206,25 @@ rebuild_custom_nav_root_view (BzWindow *self)
 static void
 rebuild_custom_nav_labels_view (BzWindow *self)
 {
-  GtkWidget *box;
-  GtkWidget *back_btn;
-  GtkWidget *back_label;
-  GtkWidget *entry;
-  GtkWidget *add_btn;
-  GtkWidget *hbox;
-  GtkWidget *list_box;
-  int        max_height = 250;
+  CzCustomLabelStore  *store;
+  g_autofree char     *category = NULL;
+  GPtrArray           *names    = NULL;
+  GtkWidget           *box;
+  GtkWidget           *back_btn;
+  GtkWidget           *back_label;
+  GtkWidget           *cat_label;
+  GtkWidget           *entry;
+  GtkWidget           *add_btn;
+  GtkWidget           *hbox;
+  GtkWidget           *list_box;
+  gboolean             has_category;
+  int                  max_height = 250;
 
-  g_hash_table_remove_all (self->local_noncore_names);
-  custom_nav_load_names (self);
+  store = nav_store (self);
+  category = nav_active_category_name (self);
+  has_category = (category != NULL && store != NULL);
+  if (has_category)
+    names = cz_custom_label_store_get_category_label_names (store, category);
 
   box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
   gtk_widget_set_margin_start (box, 8);
@@ -1221,6 +1243,25 @@ rebuild_custom_nav_labels_view (BzWindow *self)
                     G_CALLBACK (on_nav_back_clicked), self);
   gtk_box_append (GTK_BOX (box), back_btn);
 
+  /* Current category header (active tab on the custom page is the default) */
+  {
+    g_autofree char *cat_text = NULL;
+
+    if (has_category)
+      cat_text = g_strdup_printf (_ ("Category: %s"), category);
+    else
+      cat_text = g_strdup (_ ("No category selected"));
+
+    cat_label = gtk_label_new (cat_text);
+  }
+  gtk_label_set_xalign (GTK_LABEL (cat_label), 0.0);
+  gtk_widget_set_hexpand (cat_label, TRUE);
+  gtk_widget_set_margin_start (cat_label, 4);
+  gtk_widget_set_margin_end (cat_label, 4);
+  gtk_widget_set_margin_top (cat_label, 2);
+  gtk_widget_set_margin_bottom (cat_label, 2);
+  gtk_box_append (GTK_BOX (box), cat_label);
+
   /* Entry + Add button row */
   hbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
   entry = gtk_entry_new ();
@@ -1237,6 +1278,12 @@ rebuild_custom_nav_labels_view (BzWindow *self)
   gtk_box_append (GTK_BOX (hbox), add_btn);
 
   gtk_box_append (GTK_BOX (box), hbox);
+
+  if (!has_category)
+    {
+      gtk_widget_set_sensitive (entry, FALSE);
+      gtk_widget_set_sensitive (add_btn, FALSE);
+    }
 
   /* Compute max_height from monitor geometry */
   {
@@ -1260,9 +1307,9 @@ rebuild_custom_nav_labels_view (BzWindow *self)
   /* Build list of existing names with delete buttons */
   list_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 
-  if (g_hash_table_size (self->local_noncore_names) == 0)
+  if (names == NULL || names->len == 0)
     {
-      GtkWidget *empty = gtk_label_new ("No custom labels");
+      GtkWidget *empty = gtk_label_new (_ ("No custom labels"));
       gtk_widget_set_margin_start (empty, 6);
       gtk_widget_set_margin_end (empty, 6);
       gtk_widget_set_margin_top (empty, 6);
@@ -1271,19 +1318,11 @@ rebuild_custom_nav_labels_view (BzWindow *self)
     }
   else
     {
-      GHashTableIter iter;
-      gpointer       k;
-      GPtrArray     *sorted;
+      g_ptr_array_sort (names, compare_names);
 
-      sorted = g_ptr_array_new ();
-      g_hash_table_iter_init (&iter, self->local_noncore_names);
-      while (g_hash_table_iter_next (&iter, &k, NULL))
-        g_ptr_array_add (sorted, k);
-      g_ptr_array_sort (sorted, compare_names);
-
-      for (guint i = 0; i < sorted->len; i++)
+      for (guint i = 0; i < names->len; i++)
         {
-          const char *name = (const char *) g_ptr_array_index (sorted, i);
+          const char *name = (const char *) g_ptr_array_index (names, i);
           GtkWidget  *row;
           GtkWidget  *label;
           GtkWidget  *del_btn;
@@ -1302,15 +1341,16 @@ rebuild_custom_nav_labels_view (BzWindow *self)
           del_btn = gtk_button_new_from_icon_name ("user-trash-symbolic");
           gtk_widget_add_css_class (del_btn, "flat");
           gtk_widget_add_css_class (del_btn, "circular");
-          g_object_set_data (G_OBJECT (del_btn), "noncore-name",
-                             (gpointer) name);
+          g_object_set_data_full (G_OBJECT (del_btn), "noncore-name",
+                                  g_strdup (name), g_free);
+          g_object_set_data_full (G_OBJECT (del_btn), "noncore-category",
+                                  g_strdup (category), g_free);
           g_signal_connect (del_btn, "clicked",
                             G_CALLBACK (on_custom_nav_delete_clicked), self);
           gtk_box_append (GTK_BOX (row), del_btn);
 
           gtk_box_append (GTK_BOX (list_box), row);
         }
-      g_ptr_array_unref (sorted);
     }
 
   /* Always use GtkScrolledWindow with propagate-natural-height so
@@ -1327,8 +1367,10 @@ rebuild_custom_nav_labels_view (BzWindow *self)
     gtk_box_append (GTK_BOX (box), scroll);
 
     g_debug ("[DIAG] rebuild_custom_nav_popup: n_items=%u, max_height=%d",
-             g_hash_table_size (self->local_noncore_names), max_height);
+             names ? names->len : 0, max_height);
   }
+
+  g_clear_pointer (&names, g_ptr_array_unref);
 
   self->rebuilding_popup = TRUE;
   gtk_window_set_child (self->custom_nav_popup, box);
@@ -1675,8 +1717,6 @@ bz_window_init (BzWindow *self)
   gtk_widget_add_controller (GTK_WIDGET (self), self->key_controller);
 
   /* Custom nav (non-core label management) */
-  self->local_noncore_names = g_hash_table_new_full (
-      g_str_hash, g_str_equal, g_free, NULL);
   {
     char *data_dir = g_build_filename (g_get_user_data_dir (),
                                        "io.github.kolunmi.Bazaar",
@@ -1907,15 +1947,20 @@ transact_fiber (TransactData *data)
 }
 
 void
-bz_window_set_custom_label_callbacks (BzWindow                *self,
-                                      BzNoncoreNameAddedFunc   added,
-                                      BzNoncoreNameRemovedFunc removed,
-                                      gpointer                 user_data)
+bz_window_set_custom_label_store (BzWindow           *self,
+                                  CzCustomLabelStore *store)
 {
   g_return_if_fail (BZ_IS_WINDOW (self));
-  self->noncore_name_added_cb   = added;
-  self->noncore_name_removed_cb = removed;
-  self->noncore_name_cb_data    = user_data;
+
+  if (self->custom_label_store == store)
+    return;
+
+  g_clear_object (&self->custom_label_store);
+  if (store != NULL)
+    self->custom_label_store = g_object_ref (store);
+
+  if (self->full_view != NULL)
+    bz_full_view_set_custom_label_store (self->full_view, store);
 }
 
 BzWindow *

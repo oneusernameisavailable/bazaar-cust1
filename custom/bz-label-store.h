@@ -129,6 +129,46 @@ bz_label_store_count_noncore_label (BzLabelStore *store,
                                     const char   *label);
 
 gboolean
+bz_label_store_get_app_custom_label (BzLabelStore *store,
+                                     const char   *app_id,
+                                     char        **category_out,
+                                     char        **label_out);
+
+gboolean
+bz_label_store_set_app_custom_label (BzLabelStore *store,
+                                     const char   *app_id,
+                                     const char   *category,
+                                     const char   *label,
+                                     GError      **error);
+
+char **
+bz_label_store_get_app_custom_label_app_ids (BzLabelStore *store);
+
+char **
+bz_label_store_get_category_label_names (BzLabelStore *store,
+                                         const char   *category);
+
+char **
+bz_label_store_get_categories_with_label_names (BzLabelStore *store);
+
+gboolean
+bz_label_store_add_category_label_name (BzLabelStore *store,
+                                        const char   *category,
+                                        const char   *name,
+                                        GError      **error);
+
+gboolean
+bz_label_store_remove_category_label_name (BzLabelStore *store,
+                                           const char   *category,
+                                           const char   *name,
+                                           GError      **error);
+
+guint
+bz_label_store_count_category_label_assignments (BzLabelStore *store,
+                                                 const char   *category,
+                                                 const char   *name);
+
+gboolean
 bz_label_store_export (BzLabelStore *store,
                        GString      *out,
                        GError      **error);

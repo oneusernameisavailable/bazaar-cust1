@@ -24,6 +24,7 @@
 
 #include "bz-screenshot-page.h"
 #include "bz-state-info.h"
+#include "cz-custom-label-store.h"
 
 G_BEGIN_DECLS
 
@@ -71,16 +72,14 @@ bz_window_bulk_install (BzWindow   *self,
 BzStateInfo *
 bz_window_get_state_info (BzWindow *self);
 
-/* Callback interface for the custom-label store (custom/ build only).
- * bz_window emits these when noncore names are added/deleted so the
- * custom-label store can keep its in-memory state in sync. */
-typedef void (*BzNoncoreNameAddedFunc) (const char *name, gpointer user_data);
-typedef void (*BzNoncoreNameRemovedFunc) (const char *name, gpointer user_data);
-
+/* Takes a strong reference on @store (released in dispose).  The store is
+ * the shared per-category custom-label store owned by the custom page; the
+ * window's label manager (hamburger menu on the Custom tab) reads and writes
+ * names for the page's active category through it.  Passing NULL releases
+ * the previous reference without replacing it.  The store is also handed to
+ * the full view so its mono-select popover stays live. */
 void
-bz_window_set_custom_label_callbacks (BzWindow                *self,
-                                      BzNoncoreNameAddedFunc   added,
-                                      BzNoncoreNameRemovedFunc removed,
-                                      gpointer                 user_data);
+bz_window_set_custom_label_store (BzWindow           *self,
+                                  CzCustomLabelStore *store);
 
 G_END_DECLS

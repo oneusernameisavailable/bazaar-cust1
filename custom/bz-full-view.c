@@ -28,6 +28,7 @@
 #include "bz-app-size-dialog.h"
 #include "bz-app-tile.h"
 #include "bz-apps-page.h"
+#include "bz-application.h"
 #include "bz-appstream-description-render.h"
 #include "bz-context-tile-callbacks.h"
 #include "bz-context-tile.h"
@@ -38,6 +39,7 @@
 #include "bz-fading-clamp.h"
 #include "bz-favorite-button.h"
 #include "bz-flatpak-entry.h"
+#include "bz-flathub-state.h"
 #include "bz-full-view.h"
 #include "bz-hardware-support-dialog.h"
 #include "bz-install-controls.h"
@@ -57,6 +59,9 @@
 #include "bz-template-callbacks.h"
 #include "bz-util.h"
 #include "bz-window.h"
+
+#include "cz-custom-filter.h"
+#include "cz-custom-label-store.h"
 
 struct _BzFullView
 {
@@ -86,15 +91,17 @@ struct _BzFullView
   BzLabelStore *label_store;
   GtkPopover   *core_label_popover;
 
-  /* Custom labels (user-created, multi-select per app) */
-  GHashTable   *custom_labels;        /* app_id -> GPtrArray* of label strings */
-  GHashTable   *custom_label_names;   /* set of available custom label names */
-  GtkPopover   *custom_label_popover;
+  /* Custom labels (per-category mono-select; shared with custom page) */
+  CzCustomLabelStore *custom_label_store; /* shared facade (owned ref), or NULL */
+  CzCategoryPrimary  *primary;            /* primary-tab resolver (owned), or NULL */
+  gboolean            rebuilding_popover;  /* suppress writes while rebuilding */
+  GtkPopover         *custom_label_popover;
 
   /* Free-form review notes (aesthetics/usability/features/issues) */
   GtkPopover    *review_popover;
   GtkTextBuffer *review_buffers[4];
   guint          review_save_src;      /* pending debounce timeout id, 0 none */
+  gboolean       review_select_on_focus; /* Tab-driven select-all on entry */
 };
 
 G_DEFINE_FINAL_TYPE (BzFullView, bz_full_view, ADW_TYPE_BIN)
@@ -154,8 +161,12 @@ bz_full_view_dispose (GObject *object)
       self->core_label_popover = NULL;
     }
 
-  g_clear_pointer (&self->custom_labels, g_hash_table_unref);
-  g_clear_pointer (&self->custom_label_names, g_hash_table_unref);
+  if (self->custom_label_store != NULL)
+    {
+      g_signal_handlers_disconnect_by_data (self->custom_label_store, self);
+      g_clear_object (&self->custom_label_store);
+    }
+  g_clear_pointer (&self->primary, cz_category_primary_unref);
   if (self->custom_label_popover != NULL)
     {
       gtk_widget_unparent (GTK_WIDGET (self->custom_label_popover));
@@ -751,7 +762,9 @@ debug_id_inspect_cb (BzFullView *self,
 /*  Label persistence (SQLite store shared with custom companion app)  */
 /* ------------------------------------------------------------------ */
 
-/* Load the full label state from the store into the in-memory maps. */
+/* Load the core-label state from the store into the in-memory map.
+ * Custom (per-category) labels are read live from the shared
+ * CzCustomLabelStore during popover rebuilds, not cached here. */
 static void
 load_label_maps (BzFullView *self)
 {
@@ -761,8 +774,6 @@ load_label_maps (BzFullView *self)
 
   g_hash_table_remove_all (self->core_labels);
   g_hash_table_remove_all (self->core_label_names);
-  g_hash_table_remove_all (self->custom_labels);
-  g_hash_table_remove_all (self->custom_label_names);
 
   app_ids = bz_label_store_get_core_app_ids (self->label_store);
   if (app_ids != NULL)
@@ -778,44 +789,12 @@ load_label_maps (BzFullView *self)
       g_strfreev (app_ids);
     }
 
-  app_ids = bz_label_store_get_noncore_app_ids (self->label_store);
-  if (app_ids != NULL)
-    {
-      for (i = 0; app_ids[i] != NULL; i++)
-        {
-          char **labels = bz_label_store_get_noncore_labels (self->label_store,
-                                                              app_ids[i]);
-          if (labels != NULL && labels[0] != NULL)
-            {
-              GPtrArray *label_array = g_ptr_array_new_with_free_func (g_free);
-              for (guint j = 0; labels[j] != NULL; j++)
-                g_ptr_array_add (label_array, g_strdup (labels[j]));
-              g_hash_table_insert (self->custom_labels,
-                                   g_strdup (app_ids[i]),
-                                   label_array);
-              for (guint j = 0; labels[j] != NULL; j++)
-                g_hash_table_add (self->custom_label_names, g_strdup (labels[j]));
-            }
-          g_strfreev (labels);
-        }
-      g_strfreev (app_ids);
-    }
-
   /* Load core label names */
   names = bz_label_store_get_all_core_label_names (self->label_store);
   if (names != NULL)
     {
       for (i = 0; names[i] != NULL; i++)
         g_hash_table_add (self->core_label_names, g_strdup (names[i]));
-      g_strfreev (names);
-    }
-
-  /* Load custom label names */
-  names = bz_label_store_get_all_label_names (self->label_store);
-  if (names != NULL)
-    {
-      for (i = 0; names[i] != NULL; i++)
-        g_hash_table_add (self->custom_label_names, g_strdup (names[i]));
       g_strfreev (names);
     }
 }
@@ -957,15 +936,83 @@ compare_names (gconstpointer a, gconstpointer b)
 
 static void on_custom_label_toggled (GtkCheckButton *button, BzFullView *self);
 
-static void rebuild_custom_label_popover (BzFullView *self)
+/* Derives the active app's primary tab from the live categories model.
+ * Full-view and the custom page agree because both run the same engine
+ * over the same model.  The resolver is rebuilt per call so tab
+ * membership stays fresh.  Returns a string owned by the resolver valid
+ * until the next call, or NULL when the app has no visible tab (EOL —
+ * the custom-label button is hidden then). */
+static const char *
+resolve_custom_category (BzFullView *self)
 {
-  GtkWidget     *box = NULL;
-  GtkWidget     *scroll = NULL;
-  const char    *current_app_id = NULL;
-  GPtrArray     *current_custom_labels = NULL;
-  GHashTableIter iter;
-  gpointer       k = NULL;
-  GtkWidget     *list_box = NULL;
+  BzStateInfo    *state;
+  BzFlathubState *flathub;
+  GListModel     *categories;
+  const char     *app_id;
+
+  if (self->group == NULL)
+    return NULL;
+  app_id = bz_entry_group_get_id (self->group);
+  if (app_id == NULL)
+    return NULL;
+
+  state = self->state != NULL ? self->state : bz_state_info_get_default ();
+  if (state == NULL)
+    return NULL;
+  flathub = bz_state_info_get_flathub (state);
+  if (flathub == NULL)
+    return NULL;
+  categories = bz_flathub_state_get_categories (flathub);
+  if (categories == NULL)
+    return NULL;
+
+  g_clear_pointer (&self->primary, cz_category_primary_unref);
+  self->primary = cz_category_primary_new (categories);
+  return cz_category_primary_resolve_tab (self->primary, app_id);
+}
+
+static void
+add_custom_radio_row (BzFullView      *self,
+                      GtkWidget       *list_box,
+                      GtkCheckButton **group,
+                      const char      *name)
+{
+  GtkWidget *check;
+
+  /* The first row starts the radio group; later rows join it so exactly
+   * one row is active at any time (mono-select). */
+  check = gtk_check_button_new_with_label (name);
+  if (*group != NULL)
+    gtk_check_button_set_group (GTK_CHECK_BUTTON (check), *group);
+  *group = GTK_CHECK_BUTTON (check);
+
+  gtk_widget_set_margin_start (check, 6);
+  gtk_widget_set_margin_end (check, 6);
+  gtk_widget_set_margin_top (check, 2);
+  gtk_widget_set_margin_bottom (check, 2);
+  g_object_set_data_full (G_OBJECT (check), "custom-label",
+                          g_strdup (name), g_free);
+  g_signal_connect (check, "toggled",
+                    G_CALLBACK (on_custom_label_toggled), self);
+  gtk_box_append (GTK_BOX (list_box), check);
+}
+
+static void
+rebuild_custom_label_popover (BzFullView *self)
+{
+  GtkWidget      *box = NULL;
+  GtkWidget      *scroll = NULL;
+  GtkWidget      *list_box = NULL;
+  GtkWidget      *child = NULL;
+  GtkCheckButton *group = NULL;
+  const char     *app_id = NULL;
+  const char     *category = NULL;
+  const char     *current_category = NULL;
+  const char     *current_label = NULL;
+  const char     *selected = NULL;
+  const char     *name = NULL;
+  GPtrArray      *names = NULL;
+  guint           i;
 
   gtk_popover_set_child (self->custom_label_popover, NULL);
 
@@ -983,8 +1030,23 @@ static void rebuild_custom_label_popover (BzFullView *self)
       return;
     }
 
-  current_app_id = bz_entry_group_get_id (self->group);
-  current_custom_labels = (GPtrArray *) g_hash_table_lookup (self->custom_labels, current_app_id);
+  app_id = bz_entry_group_get_id (self->group);
+  category = resolve_custom_category (self);
+
+  /* EOL apps have no visible tab, so no custom labels surface at all. */
+  gtk_widget_set_visible (GTK_WIDGET (self->noncore_label_button),
+                          category != NULL);
+  if (category == NULL)
+    {
+      GtkWidget *no_category = gtk_label_new ("No category selected");
+      gtk_widget_set_margin_start (no_category, 12);
+      gtk_widget_set_margin_end (no_category, 12);
+      gtk_widget_set_margin_top (no_category, 6);
+      gtk_widget_set_margin_bottom (no_category, 6);
+      gtk_box_append (GTK_BOX (box), no_category);
+      gtk_popover_set_child (self->custom_label_popover, box);
+      return;
+    }
 
   box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
   gtk_widget_set_margin_start (box, 8);
@@ -993,7 +1055,6 @@ static void rebuild_custom_label_popover (BzFullView *self)
   gtk_widget_set_margin_bottom (box, 8);
   gtk_widget_set_size_request (box, 280, -1);
 
-  /* Custom Labels (Multi-Select - Checkboxes) */
   {
     GtkWidget *section_label = gtk_label_new ("Custom Labels");
     gtk_widget_set_halign (section_label, GTK_ALIGN_START);
@@ -1031,65 +1092,65 @@ static void rebuild_custom_label_popover (BzFullView *self)
 
   list_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 
-  if (g_hash_table_size (self->custom_label_names) == 0)
+  self->rebuilding_popover = TRUE;
+
+  /* "Unlabeled" is always present as the clear/no-assignment row. */
+  add_custom_radio_row (self, list_box, &group, CZ_UNLABELED_PILL_TEXT);
+
+  if (self->custom_label_store != NULL)
+    names = cz_custom_label_store_get_category_label_names (
+        self->custom_label_store, category);
+  if (names != NULL)
+    g_ptr_array_sort (names, compare_names);
+  for (i = 0; names != NULL && i < names->len; i++)
     {
-      GtkWidget *empty = gtk_label_new ("No custom labels defined");
-      gtk_widget_set_margin_start (empty, 12);
-      gtk_widget_set_margin_end (empty, 12);
-      gtk_widget_set_margin_top (empty, 6);
-      gtk_widget_set_margin_bottom (empty, 6);
-      gtk_box_append (GTK_BOX (list_box), empty);
+      name = (const char *) g_ptr_array_index (names, i);
+      if (name == NULL || *name == '\0' ||
+          g_strcmp0 (name, CZ_UNLABELED_PILL_TEXT) == 0)
+        continue;
+      add_custom_radio_row (self, list_box, &group, name);
     }
+
+  /* Mark the active row only when the stored assignment belongs to the
+   * resolved tab; anything else (or no assignment) reads as Unlabeled. */
+  if (self->custom_label_store != NULL)
+    {
+      current_category = cz_custom_label_store_get_app_custom_category (
+          self->custom_label_store, app_id);
+      current_label = cz_custom_label_store_get_app_custom_label (
+          self->custom_label_store, app_id);
+    }
+  if (current_category != NULL && current_label != NULL &&
+      g_strcmp0 (current_category, category) == 0)
+    selected = current_label;
   else
+    selected = CZ_UNLABELED_PILL_TEXT;
+
+  for (child = gtk_widget_get_first_child (list_box);
+       child != NULL;
+       child = gtk_widget_get_next_sibling (child))
     {
-      GPtrArray *sorted;
-
-      sorted = g_ptr_array_new ();
-      g_hash_table_iter_init (&iter, self->custom_label_names);
-      while (g_hash_table_iter_next (&iter, &k, NULL))
-        g_ptr_array_add (sorted, k);
-      g_ptr_array_sort (sorted, compare_names);
-
-      for (guint i = 0; i < sorted->len; i++)
+      name = (const char *) g_object_get_data (G_OBJECT (child),
+                                               "custom-label");
+      if (name == NULL)
+        continue;
+      if (g_strcmp0 (name, selected) == 0)
         {
-          const char   *name = (const char *) g_ptr_array_index (sorted, i);
-          GtkWidget    *check = gtk_check_button_new_with_label (name);
-          gboolean      is_selected = FALSE;
-
-          if (current_custom_labels != NULL)
-            {
-              for (guint j = 0; j < current_custom_labels->len; j++)
-                {
-                  const char *assigned = (const char *) g_ptr_array_index (current_custom_labels, j);
-                  if (g_strcmp0 (assigned, name) == 0)
-                    {
-                      is_selected = TRUE;
-                      break;
-                    }
-                }
-            }
-
-          gtk_check_button_set_active (GTK_CHECK_BUTTON (check), is_selected);
-          if (is_selected)
-            gtk_widget_add_css_class (check, "suggested-action");
-          gtk_widget_set_margin_start (check, 6);
-          gtk_widget_set_margin_end (check, 6);
-          gtk_widget_set_margin_top (check, 2);
-          gtk_widget_set_margin_bottom (check, 2);
-
-          g_object_set_data_full (G_OBJECT (check), "custom-label", g_strdup (name), g_free);
-          g_signal_connect (check, "toggled",
-                            G_CALLBACK (on_custom_label_toggled), self);
-          gtk_box_append (GTK_BOX (list_box), check);
+          gtk_check_button_set_active (GTK_CHECK_BUTTON (child), TRUE);
+          gtk_widget_add_css_class (child, "suggested-action");
+          break;
         }
-      g_ptr_array_unref (sorted);
     }
+
+  self->rebuilding_popover = FALSE;
 
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), list_box);
 
   gtk_box_append (GTK_BOX (box), scroll);
 
   gtk_popover_set_child (self->custom_label_popover, box);
+
+  g_clear_pointer (&names, g_ptr_array_unref);
 }
 static void rebuild_review_popover (BzFullView *self);
 
@@ -1128,53 +1189,51 @@ static void on_core_label_toggled (GtkCheckButton *button,
   gtk_popover_popdown (GTK_POPOVER (self->core_label_popover));
 }
 
-static void on_custom_label_toggled (GtkCheckButton *button,
-                          BzFullView     *self)
+static void
+on_custom_label_toggled (GtkCheckButton *button,
+                         BzFullView     *self)
 {
   const char *label;
-  BzEntryGroup *group;
+  const char *category;
   const char *app_id;
-  GPtrArray *current_labels;
+
+  if (self->rebuilding_popover)
+    return;
+  if (!gtk_check_button_get_active (button))
+    return;
 
   label = (const char *) g_object_get_data (G_OBJECT (button), "custom-label");
   if (label == NULL)
     return;
-
-  group = self->group;
-  if (group == NULL)
+  if (self->custom_label_store == NULL || self->group == NULL)
     return;
 
-  app_id = bz_entry_group_get_id (group);
+  category = resolve_custom_category (self);
+  if (category == NULL)
+    return;
 
-  current_labels = (GPtrArray *) g_hash_table_lookup (self->custom_labels, app_id);
-  if (current_labels == NULL)
-    {
-      current_labels = g_ptr_array_new_with_free_func (g_free);
-      g_hash_table_insert (self->custom_labels, g_strdup (app_id), current_labels);
-    }
+  app_id = bz_entry_group_get_id (self->group);
 
-  if (gtk_check_button_get_active (button))
-    {
-      /* Add label */
-      g_ptr_array_add (current_labels, g_strdup (label));
-      bz_label_store_add_noncore_label (self->label_store, app_id, label, NULL);
-      gtk_widget_add_css_class (GTK_WIDGET (button), "suggested-action");
-    }
+  if (g_strcmp0 (label, CZ_UNLABELED_PILL_TEXT) == 0)
+    cz_custom_label_store_set_app_custom_label (self->custom_label_store,
+                                                app_id, category, NULL);
   else
-    {
-      /* Remove label */
-      for (guint i = 0; i < current_labels->len; i++)
-        {
-          const char *existing = (const char *) g_ptr_array_index (current_labels, i);
-          if (g_strcmp0 (existing, label) == 0)
-            {
-              g_ptr_array_remove_index (current_labels, i);
-              break;
-            }
-        }
-      bz_label_store_remove_noncore_label (self->label_store, app_id, label, NULL);
-      gtk_widget_remove_css_class (GTK_WIDGET (button), "suggested-action");
-    }
+    cz_custom_label_store_set_app_custom_label (self->custom_label_store,
+                                                app_id, category, label);
+
+  gtk_popover_popdown (GTK_POPOVER (self->custom_label_popover));
+}
+
+static void
+on_custom_label_store_changed (CzCustomLabelStore *store,
+                               BzFullView         *self)
+{
+  /* The store is the single source of truth; keep a live popover in sync
+   * (e.g. when the label manager edits a category's label names). */
+  (void) store;
+  if (self->custom_label_popover != NULL &&
+      gtk_popover_get_child (self->custom_label_popover) != NULL)
+    rebuild_custom_label_popover (self);
 }
 
 /* Review notes (free-form, one text field per aspect) */
@@ -1266,6 +1325,7 @@ review_popover_set_menu (BzFullView *self)
   GtkWidget *label = NULL;
 
   gtk_popover_set_child (self->review_popover, NULL);
+  self->review_select_on_focus = FALSE;
 
   box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_size_request (box, 200, -1);
@@ -1284,6 +1344,66 @@ review_popover_set_menu (BzFullView *self)
 }
 
 static void
+on_review_form_view_mapped (GtkWidget *widget,
+                            gpointer   user_data)
+{
+  (void) user_data;
+  gtk_widget_grab_focus (widget);
+}
+
+static void
+on_review_field_focus_enter (GtkEventControllerFocus *ctrl,
+                             gpointer                 user_data)
+{
+  BzFullView     *self = BZ_FULL_VIEW (user_data);
+  GtkWidget      *view = NULL;
+  GtkTextBuffer  *buffer = NULL;
+  GtkTextIter     start;
+  GtkTextIter     end;
+
+  if (!self->review_select_on_focus)
+    return;
+  self->review_select_on_focus = FALSE;
+
+  view   = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (ctrl));
+  buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (view));
+  if (gtk_text_buffer_get_char_count (buffer) > 0)
+    {
+      gtk_text_buffer_get_start_iter (buffer, &start);
+      gtk_text_buffer_get_end_iter (buffer, &end);
+      gtk_text_buffer_select_range (buffer, &start, &end);
+      g_debug ("[DIAG] on_review_field_focus_enter: selected all on tab entry");
+    }
+}
+
+static gboolean
+on_review_form_key_pressed (GtkEventControllerKey *ctrl,
+                            guint                  keyval,
+                            guint                  keycode,
+                            GdkModifierType        state,
+                            gpointer               user_data)
+{
+  BzFullView *self = BZ_FULL_VIEW (user_data);
+  GtkWidget  *box = NULL;
+
+  (void) keycode;
+
+  if (keyval == GDK_KEY_Tab &&
+      (state & (GDK_CONTROL_MASK | GDK_ALT_MASK)) == 0)
+    {
+      self->review_select_on_focus = TRUE;
+      box = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (ctrl));
+      gtk_widget_child_focus (
+          box, (state & GDK_SHIFT_MASK) ? GTK_DIR_TAB_BACKWARD
+                                        : GTK_DIR_TAB_FORWARD);
+      g_debug ("[DIAG] on_review_form_key_pressed: Tab->child_focus shift=%d",
+               (state & GDK_SHIFT_MASK) != 0);
+      return TRUE;
+    }
+  return FALSE;
+}
+
+static void
 review_popover_set_form (BzFullView *self)
 {
   static const char *field_names[4] = {
@@ -1292,6 +1412,8 @@ review_popover_set_form (BzFullView *self)
   char            *saved[4] = { NULL, NULL, NULL, NULL };
   const char      *app_id = NULL;
   GtkWidget       *box = NULL;
+  GtkWidget       *first_view = NULL;
+  GtkEventController *key_ctrl = NULL;
   gboolean         found = FALSE;
   int              i;
 
@@ -1344,10 +1466,31 @@ review_popover_set_form (BzFullView *self)
       self->review_buffers[i] = buffer;
       g_signal_connect (buffer, "changed",
                         G_CALLBACK (on_review_field_changed), self);
+
+      {
+        GtkEventController *focus_ctrl = gtk_event_controller_focus_new ();
+        g_signal_connect (focus_ctrl, "enter",
+                          G_CALLBACK (on_review_field_focus_enter), self);
+        gtk_widget_add_controller (view, focus_ctrl);
+      }
+
+      if (i == 0)
+        first_view = view;
     }
 
   for (i = 0; i < 4; i++)
     g_free (saved[i]);
+
+  if (first_view != NULL)
+    g_signal_connect (first_view, "map",
+                      G_CALLBACK (on_review_form_view_mapped), self);
+
+  key_ctrl = gtk_event_controller_key_new ();
+  gtk_event_controller_set_propagation_phase (
+      key_ctrl, GTK_PHASE_CAPTURE);
+  g_signal_connect (key_ctrl, "key-pressed",
+                    G_CALLBACK (on_review_form_key_pressed), self);
+  gtk_widget_add_controller (GTK_WIDGET (box), key_ctrl);
 
   gtk_popover_set_child (self->review_popover, box);
 }
@@ -1360,42 +1503,26 @@ rebuild_review_popover (BzFullView *self)
 
 /* Public API */
 
-void bz_full_view_update_custom_label_names (BzFullView *self,
-                                        GPtrArray  *names)
+void bz_full_view_set_custom_label_store (BzFullView         *self,
+                                          CzCustomLabelStore *store)
 {
   g_return_if_fail (BZ_IS_FULL_VIEW (self));
+  g_return_if_fail (store == NULL || CZ_IS_CUSTOM_LABEL_STORE (store));
 
-  g_hash_table_remove_all (self->custom_label_names);
-  if (names != NULL)
-    {
-      for (guint i = 0; i < names->len; i++)
-        {
-          const char *name = (const char *) g_ptr_array_index (names, i);
-          if (name != NULL && *name != '\0')
-            g_hash_table_add (self->custom_label_names, g_strdup (name));
-        }
-    }
-
-  /* Rebuild popover if it's currently showing */
-  if (self->custom_label_popover != NULL &&
-      gtk_popover_get_child (self->custom_label_popover) != NULL)
-    rebuild_custom_label_popover (self);
-}
-
-void bz_full_view_reload_custom_label_names (BzFullView *self)
-{
-  g_return_if_fail (BZ_IS_FULL_VIEW (self));
-
-  if (self->label_store == NULL)
+  if (self->custom_label_store == store)
     return;
 
-  char **names = bz_label_store_get_all_label_names (self->label_store);
-  if (names != NULL)
+  if (self->custom_label_store != NULL)
     {
-      g_hash_table_remove_all (self->custom_label_names);
-      for (guint i = 0; names[i] != NULL; i++)
-        g_hash_table_add (self->custom_label_names, g_strdup (names[i]));
-      g_strfreev (names);
+      g_signal_handlers_disconnect_by_data (self->custom_label_store, self);
+      g_clear_object (&self->custom_label_store);
+    }
+
+  if (store != NULL)
+    {
+      self->custom_label_store = g_object_ref (store);
+      g_signal_connect (store, "changed",
+                        G_CALLBACK (on_custom_label_store_changed), self);
     }
 
   /* Rebuild popover if it's currently showing */
@@ -1523,11 +1650,6 @@ bz_full_view_init (BzFullView *self)
   self->core_labels         = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                       g_free, g_free);
   self->core_label_names    = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                                      g_free, NULL);
-  self->custom_labels       = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                                      g_free,
-                                                      (GDestroyNotify) g_ptr_array_unref);
-  self->custom_label_names  = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                       g_free, NULL);
   {
     char *data_dir = g_build_filename (g_get_user_data_dir (),

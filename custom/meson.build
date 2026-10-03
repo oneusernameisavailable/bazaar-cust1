@@ -447,6 +447,16 @@ test('cz-app-report', test_cz_app_report_exe,
   timeout: 120,
 )
 
+test_cz_custom_filter_exe = executable('test-cz-custom-filter',
+  'test-cz-custom-filter.c',
+  dependencies: bz_dep,
+)
+test('cz-custom-filter', test_cz_custom_filter_exe,
+  protocol: 'exitcode',
+  env: ['G_TEST_OPTION_DEFAULTS=1', 'GSETTINGS_BACKEND=memory'],
+  timeout: 120,
+)
+
 executable(refresh_worker_bin_name,
            ['refresh-worker.c'],
            link_with: bz_lib,

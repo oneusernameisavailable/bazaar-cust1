@@ -9,6 +9,7 @@
 #include "config.h"
 
 #include "cz-custom-label-store.h"
+#include "bz-label-store.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -51,8 +52,8 @@ cleanup (const char *path)
 
 /* Build a store whose SQLite backend is open (via load_from_path), matching
  * real usage (cz-main.c loads before adding names).  A bare
- * cz_custom_label_store_new() leaves self->store == NULL and
- * add_noncore_label_name() g_warning's ("database store is NULL"). */
+ * cz_custom_label_store_new() leaves self->store == NULL and the category
+ * name API g_warning()s ("database store is NULL"). */
 static CzCustomLabelStore *
 make_loaded_store (void)
 {
@@ -121,65 +122,6 @@ test_get_set_core_label (void)
 }
 
 static void
-test_noncore_add_has_remove (void)
-{
-  CzCustomLabelStore *store = cz_custom_label_store_new ();
-
-  g_assert_false (cz_custom_label_store_has_noncore_label (
-      store, "org.test.App1", "Test1"));
-  g_test_message ("DIAG:action=initial-has | app=org.test.App1 | label=Test1 | has=0");
-
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "Test1");
-  {
-    gboolean h = cz_custom_label_store_has_noncore_label (
-        store, "org.test.App1", "Test1");
-    g_test_message ("DIAG:action=after-add-1 | app=org.test.App1 | label=Test1 | has=%d", h);
-    g_assert_true (h);
-  }
-
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "Test2");
-  {
-    gboolean h = cz_custom_label_store_has_noncore_label (
-        store, "org.test.App1", "Test2");
-    g_test_message ("DIAG:action=after-add-2 | app=org.test.App1 | label=Test2 | has=%d", h);
-    g_assert_true (h);
-  }
-
-  cz_custom_label_store_remove_noncore_label (store, "org.test.App1", "Test1");
-  {
-    gboolean h1 = cz_custom_label_store_has_noncore_label (
-        store, "org.test.App1", "Test1");
-    gboolean h2 = cz_custom_label_store_has_noncore_label (
-        store, "org.test.App1", "Test2");
-    g_test_message ("DIAG:action=after-remove | app=org.test.App1 | Test1_has=%d | Test2_has=%d",
-                    h1, h2);
-    g_assert_false (h1);
-    g_assert_true (h2);
-  }
-
-  g_object_unref (store);
-}
-
-static void
-test_noncore_labels_isolated_per_app (void)
-{
-  CzCustomLabelStore *store = cz_custom_label_store_new ();
-
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "Test1");
-  {
-    gboolean h1 = cz_custom_label_store_has_noncore_label (
-        store, "org.test.App1", "Test1");
-    gboolean h2 = cz_custom_label_store_has_noncore_label (
-        store, "org.test.App2", "Test1");
-    g_test_message ("DIAG:action=isolation | has_app1=%d | has_app2=%d", h1, h2);
-    g_assert_true (h1);
-    g_assert_false (h2);
-  }
-
-  g_object_unref (store);
-}
-
-static void
 test_ensure_app_ids_creates_missing (void)
 {
   CzCustomLabelStore *store = cz_custom_label_store_new ();
@@ -236,9 +178,6 @@ test_save_and_load_roundtrip (void)
 
   cz_custom_label_store_set_core_label (s1, "org.test.App1", "Install");
   cz_custom_label_store_set_core_label (s1, "org.test.App2", "Forget it");
-  cz_custom_label_store_add_noncore_label (s1, "org.test.App1", "Test1");
-  cz_custom_label_store_add_noncore_label (s1, "org.test.App1", "Test2");
-  cz_custom_label_store_add_noncore_label (s1, "org.test.App2", "Test1");
 
   ok = cz_custom_label_store_save_to_path (s1, path);
   g_test_message ("DIAG:action=save | ok=%d", ok);
@@ -253,23 +192,12 @@ test_save_and_load_roundtrip (void)
   {
     const char *l1 = cz_custom_label_store_get_core_label (s2, "org.test.App1");
     const char *l2 = cz_custom_label_store_get_core_label (s2, "org.test.App2");
-    gboolean h1t1 = cz_custom_label_store_has_noncore_label (s2, "org.test.App1", "Test1");
-    gboolean h1t2 = cz_custom_label_store_has_noncore_label (s2, "org.test.App1", "Test2");
-    gboolean h2t1 = cz_custom_label_store_has_noncore_label (s2, "org.test.App2", "Test1");
-    gboolean h1nx = cz_custom_label_store_has_noncore_label (s2, "org.test.App1", "DoesNotExist");
 
     g_test_message ("DIAG:action=verify-roundtrip"
-                    " | app1_core=%s | app2_core=%s"
-                    " | app1_has_Test1=%d | app1_has_Test2=%d"
-                    " | app2_has_Test1=%d | app1_has_nonexist=%d",
-                    l1 ? l1 : "(null)", l2 ? l2 : "(null)",
-                    h1t1, h1t2, h2t1, h1nx);
+                    " | app1_core=%s | app2_core=%s",
+                    l1 ? l1 : "(null)", l2 ? l2 : "(null)");
     g_assert_cmpstr (l1, ==, "Install");
     g_assert_cmpstr (l2, ==, "Forget it");
-    g_assert_true (h1t1);
-    g_assert_true (h1t2);
-    g_assert_true (h2t1);
-    g_assert_false (h1nx);
   }
 
   g_object_unref (s2);
@@ -313,50 +241,16 @@ test_save_empty_store_roundtrip (void)
 
   {
     const char *l = cz_custom_label_store_get_core_label (s2, "org.unknown");
-    gboolean    h = cz_custom_label_store_has_noncore_label (s2, "org.unknown", "Test1");
-    g_test_message ("DIAG:action=verify-empty | core_default=%s | has_noncore=%d",
-                    l ? l : "(null)", h);
+    const char *c = cz_custom_label_store_get_app_custom_label (s2, "org.unknown");
+    g_test_message ("DIAG:action=verify-empty | core_default=%s | custom_label=%s",
+                    l ? l : "(null)", c ? c : "(null)");
     g_assert_cmpstr (l, ==, "New");
-    g_assert_false (h);
+    g_assert_null (c);
   }
 
   g_object_unref (s2);
   cleanup (path);
   g_free (path);
-}
-
-static void
-test_get_all_noncore_label_names (void)
-{
-  CzCustomLabelStore *store = cz_custom_label_store_new ();
-  GPtrArray *names;
-
-  names = cz_custom_label_store_get_all_noncore_label_names (store);
-  g_test_message ("DIAG:action=empty-names | count=%u", names->len);
-  g_assert_nonnull (names);
-  g_assert_cmpuint (names->len, ==, 0);
-  g_ptr_array_unref (names);
-
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "Test1");
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "Test2");
-  cz_custom_label_store_add_noncore_label (store, "org.test.App2", "Test1");
-
-  names = cz_custom_label_store_get_all_noncore_label_names (store);
-  {
-    gboolean found1 = g_ptr_array_find_with_equal_func (
-        names, "Test1", g_str_equal, NULL);
-    gboolean found2 = g_ptr_array_find_with_equal_func (
-        names, "Test2", g_str_equal, NULL);
-    g_test_message ("DIAG:action=populated-names | count=%u | has_Test1=%d | has_Test2=%d",
-                    names->len, found1, found2);
-    g_assert_nonnull (names);
-    g_assert_cmpuint (names->len, ==, 2);
-    g_assert_true (found1);
-    g_assert_true (found2);
-  }
-  g_ptr_array_unref (names);
-
-  g_object_unref (store);
 }
 
 static void
@@ -386,192 +280,6 @@ test_core_labels_isolated_per_app (void)
   g_object_unref (store);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Noncore label name API — pass-condition tests                       */
-/* ------------------------------------------------------------------ */
-
-static void
-test_add_noncore_label_name_new (void)
-{
-  CzCustomLabelStore *store = make_loaded_store ();
-  gboolean ok;
-
-  ok = cz_custom_label_store_add_noncore_label_name (store, "MyTag");
-  g_test_message ("DIAG:action=add-name-new | name=MyTag | ok=%d | expected=1", ok);
-  g_assert_true (ok);
-
-  {
-    GPtrArray *names = cz_custom_label_store_get_all_noncore_label_names (store);
-    gboolean found = g_ptr_array_find_with_equal_func (
-        names, "MyTag", g_str_equal, NULL);
-    g_test_message ("DIAG:action=add-name-verify | count=%u | found_MyTag=%d | expected=1",
-                    names->len, found);
-    g_assert_cmpuint (names->len, ==, 1);
-    g_assert_true (found);
-    g_ptr_array_unref (names);
-  }
-
-  g_object_unref (store);
-}
-
-static void
-test_add_noncore_label_name_duplicate (void)
-{
-  CzCustomLabelStore *store = make_loaded_store ();
-  gboolean ok;
-
-  ok = cz_custom_label_store_add_noncore_label_name (store, "MyTag");
-  g_assert_true (ok);
-
-  ok = cz_custom_label_store_add_noncore_label_name (store, "MyTag");
-  g_test_message ("DIAG:action=add-name-duplicate | name=MyTag | ok=%d | expected=0", ok);
-  g_assert_false (ok);
-
-  g_object_unref (store);
-}
-
-/*
- * test_add_noncore_label_name_null is deliberately omitted — passing NULL
- * triggers g_return_val_if_fail which is a GLib implementation detail.
- * The business-logic tests (add-name-new, add-name-duplicate) are
- * sufficient to verify the API contract.
- */
-
-static void
-test_remove_noncore_label_name_existing (void)
-{
-  CzCustomLabelStore *store = make_loaded_store ();
-  gboolean ok;
-
-  cz_custom_label_store_add_noncore_label_name (store, "MyTag");
-  cz_custom_label_store_add_noncore_label_name (store, "OtherTag");
-
-  ok = cz_custom_label_store_remove_noncore_label_name (store, "MyTag");
-  g_test_message ("DIAG:action=remove-name-existing | name=MyTag | ok=%d | expected=1", ok);
-  g_assert_true (ok);
-
-  {
-    GPtrArray *names = cz_custom_label_store_get_all_noncore_label_names (store);
-    gboolean found_my   = g_ptr_array_find_with_equal_func (
-        names, "MyTag", g_str_equal, NULL);
-    gboolean found_other = g_ptr_array_find_with_equal_func (
-        names, "OtherTag", g_str_equal, NULL);
-    g_test_message ("DIAG:action=remove-name-verify"
-                    " | count=%u | found_MyTag=%d | found_OtherTag=%d",
-                    names->len, found_my, found_other);
-    g_assert_cmpuint (names->len, ==, 1);
-    g_assert_false (found_my);
-    g_assert_true (found_other);
-    g_ptr_array_unref (names);
-  }
-
-  g_object_unref (store);
-}
-
-static void
-test_remove_noncore_label_name_nonexistent (void)
-{
-  CzCustomLabelStore *store = cz_custom_label_store_new ();
-  gboolean ok;
-
-  ok = cz_custom_label_store_remove_noncore_label_name (store, "DoesNotExist");
-  g_test_message ("DIAG:action=remove-name-nonexistent | name=DoesNotExist | ok=%d | expected=0", ok);
-  g_assert_false (ok);
-
-  g_object_unref (store);
-}
-
-/*
- * test_remove_noncore_label_name_null is deliberately omitted — same
- * rationale as add-name-null above.
- */
-
-static void
-test_remove_cleans_up_per_app_assignments (void)
-{
-  CzCustomLabelStore *store = cz_custom_label_store_new ();
-
-  /* Assign "MyTag" to App1 → this seeds global set */
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "MyTag");
-  cz_custom_label_store_add_noncore_label (store, "org.test.App1", "KeepTag");
-
-  {
-    gboolean h = cz_custom_label_store_has_noncore_label (store, "org.test.App1", "MyTag");
-    g_test_message ("DIAG:action=pre-remove-cleanup | app1_has_MyTag=%d | expected=1", h);
-    g_assert_true (h);
-  }
-
-  /* Remove the name globally — should also remove from per-app sets */
-  cz_custom_label_store_remove_noncore_label_name (store, "MyTag");
-
-  {
-    GPtrArray *names = cz_custom_label_store_get_all_noncore_label_names (store);
-    gboolean found = g_ptr_array_find_with_equal_func (
-        names, "MyTag", g_str_equal, NULL);
-    g_test_message ("DIAG:action=remove-cleanup-names"
-                    " | count=%u | found_MyTag=%d | expected=0", names->len, found);
-    g_assert_false (found);
-    g_assert_cmpuint (names->len, ==, 1);
-    g_ptr_array_unref (names);
-  }
-
-  {
-    gboolean h1 = cz_custom_label_store_has_noncore_label (store, "org.test.App1", "MyTag");
-    gboolean h2 = cz_custom_label_store_has_noncore_label (store, "org.test.App1", "KeepTag");
-    g_test_message ("DIAG:action=remove-cleanup-app"
-                    " | app1_has_MyTag=%d | expected=0 | app1_has_KeepTag=%d | expected=1",
-                    h1, h2);
-    g_assert_false (h1);
-    g_assert_true (h2);
-  }
-
-  g_object_unref (store);
-}
-
-static void
-test_noncore_label_names_roundtrip_save_load (void)
-{
-  CzCustomLabelStore *s1 = make_loaded_store ();
-  CzCustomLabelStore *s2;
-  char *path = temp_path ();
-  gboolean ok;
-
-  g_remove (path);
-
-  cz_custom_label_store_add_noncore_label_name (s1, "TagA");
-  cz_custom_label_store_add_noncore_label_name (s1, "TagB");
-  cz_custom_label_store_add_noncore_label_name (s1, "TagC");
-
-  ok = cz_custom_label_store_save_to_path (s1, path);
-  g_test_message ("DIAG:action=names-save | ok=%d", ok);
-  g_assert_true (ok);
-  g_object_unref (s1);
-
-  s2 = cz_custom_label_store_new ();
-  ok = cz_custom_label_store_load_from_path (s2, path);
-  g_test_message ("DIAG:action=names-load | ok=%d", ok);
-  g_assert_true (ok);
-
-  {
-    GPtrArray *names = cz_custom_label_store_get_all_noncore_label_names (s2);
-    gboolean fa = g_ptr_array_find_with_equal_func (names, "TagA", g_str_equal, NULL);
-    gboolean fb = g_ptr_array_find_with_equal_func (names, "TagB", g_str_equal, NULL);
-    gboolean fc = g_ptr_array_find_with_equal_func (names, "TagC", g_str_equal, NULL);
-    g_test_message ("DIAG:action=names-verify-roundtrip"
-                    " | count=%u | has_TagA=%d | has_TagB=%d | has_TagC=%d",
-                    names->len, fa, fb, fc);
-    g_assert_cmpuint (names->len, ==, 3);
-    g_assert_true (fa);
-    g_assert_true (fb);
-    g_assert_true (fc);
-    g_ptr_array_unref (names);
-  }
-
-  g_object_unref (s2);
-  cleanup (path);
-  g_free (path);
-}
-
 static void
 test_noncore_label_names_backward_compat (void)
 {
@@ -583,6 +291,12 @@ test_noncore_label_names_backward_compat (void)
   JsonObject         *root_obj;
   JsonObject         *noncore_obj;
   JsonArray          *arr;
+  BzLabelStore       *db;
+  char               *dir;
+  char              **legacy_labels;
+  guint               i;
+  gboolean            f1 = FALSE;
+  gboolean            f2 = FALSE;
 
 
   /* Write JSON with noncore per-app assignments but NO noncore_label_names key.
@@ -612,39 +326,327 @@ test_noncore_label_names_backward_compat (void)
   g_test_message ("DIAG:action=names-backward-compat | ok=%d | expected=1", ok);
   g_assert_true (ok);
 
-  {
-    GPtrArray *names = cz_custom_label_store_get_all_noncore_label_names (store);
-    gboolean f1 = g_ptr_array_find_with_equal_func (
-        names, "LegacyTag1", g_str_equal, NULL);
-    gboolean f2 = g_ptr_array_find_with_equal_func (
-        names, "LegacyTag2", g_str_equal, NULL);
-    g_test_message ("DIAG:action=names-backward-compat-verify"
-                    " | count=%u | has_LegacyTag1=%d | has_LegacyTag2=%d",
-                    names->len, f1, f2);
-    g_assert_cmpuint (names->len, ==, 2);
-    g_assert_true (f1);
-    g_assert_true (f2);
-    g_ptr_array_unref (names);
-  }
+  /* The legacy per-app rows are no longer served through a public setter/
+   * reader; the observable contract is that load and save_to_path preserve
+   * them.  Assert directly at the bz-label-store layer after a save
+   * round-trip. */
+  ok = cz_custom_label_store_save_to_path (store, path);
+  g_test_message ("DIAG:action=names-backward-compat-save | ok=%d | expected=1", ok);
+  g_assert_true (ok);
+
+  dir = g_path_get_dirname (path);
+  db = bz_label_store_open (path, dir, NULL);
+  g_assert_nonnull (db);
+  legacy_labels = bz_label_store_get_noncore_labels (db, "org.test.App1");
+  g_assert_nonnull (legacy_labels);
+  for (i = 0; legacy_labels[i] != NULL; i++)
+    {
+      if (g_str_equal (legacy_labels[i], "LegacyTag1"))
+        f1 = TRUE;
+      else if (g_str_equal (legacy_labels[i], "LegacyTag2"))
+        f2 = TRUE;
+    }
+  g_strfreev (legacy_labels);
+  bz_label_store_close (db);
+  g_free (dir);
+  g_test_message ("DIAG:action=names-backward-compat-verify"
+                  " | has_LegacyTag1=%d | has_LegacyTag2=%d", f1, f2);
+  g_assert_true (f1);
+  g_assert_true (f2);
 
   g_object_unref (store);
   cleanup (path);
   g_free (path);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Per-category mono custom-label API                                  */
+/* ------------------------------------------------------------------ */
+
 static void
-test_noncore_label_names_new_store_empty (void)
+test_custom_label_unlabeled_default (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  const char *label;
+  const char *category;
+
+  label    = cz_custom_label_store_get_app_custom_label (store, "org.unknown.App");
+  category = cz_custom_label_store_get_app_custom_category (store, "org.unknown.App");
+  g_test_message ("DIAG:action=custom-default | app=org.unknown.App | label=%s | category=%s",
+                  label ? label : "(null)", category ? category : "(null)");
+  g_assert_null (label);
+  g_assert_null (category);
+
+  g_object_unref (store);
+}
+
+static void
+test_custom_label_set_get (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  const char *got;
+  const char *cat;
+
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", "Wishlist");
+  got = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
+  cat = cz_custom_label_store_get_app_custom_category (store, "org.test.App1");
+  g_test_message ("DIAG:action=custom-set | app=org.test.App1 | label=%s | category=%s",
+                  got ? got : "(null)", cat ? cat : "(null)");
+  g_assert_cmpstr (got, ==, "Wishlist");
+  g_assert_cmpstr (cat, ==, "Games");
+
+  /* Mono: re-assigning replaces the previous label. */
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", "Daily");
+  got = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
+  g_test_message ("DIAG:action=custom-reset | app=org.test.App1 | label=%s | expected=Daily",
+                  got ? got : "(null)");
+  g_assert_cmpstr (got, ==, "Daily");
+
+  g_object_unref (store);
+}
+
+static void
+test_custom_label_clear (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  const char *got;
+
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", "Wishlist");
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", NULL);
+  got = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
+  g_test_message ("DIAG:action=custom-clear | app=org.test.App1 | label=%s | expected=null",
+                  got ? got : "(null)");
+  g_assert_null (got);
+
+  g_object_unref (store);
+}
+
+static void
+test_custom_label_isolated_per_app (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  const char *l1;
+  const char *l2;
+
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", "Wishlist");
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App2",
+                                              "Games", "Wishlist");
+
+  l1 = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
+  l2 = cz_custom_label_store_get_app_custom_label (store, "org.test.App2");
+  g_test_message ("DIAG:action=custom-isolation | app1=%s | app2=%s",
+                  l1 ? l1 : "(null)", l2 ? l2 : "(null)");
+  g_assert_cmpstr (l1, ==, "Wishlist");
+  g_assert_cmpstr (l2, ==, "Wishlist");
+
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", NULL);
+  l1 = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
+  l2 = cz_custom_label_store_get_app_custom_label (store, "org.test.App2");
+  g_test_message ("DIAG:action=custom-isolation-clear | app1=%s | expected=null | app2=%s",
+                  l1 ? l1 : "(null)", l2 ? l2 : "(null)");
+  g_assert_null (l1);
+  g_assert_cmpstr (l2, ==, "Wishlist");
+
+  g_object_unref (store);
+}
+
+static void
+test_custom_category_names_add_dup_remove (void)
 {
   CzCustomLabelStore *store = cz_custom_label_store_new ();
   GPtrArray *names;
+  gboolean   found;
+  gboolean   ok;
 
-  names = cz_custom_label_store_get_all_noncore_label_names (store);
-  g_test_message ("DIAG:action=names-new-store | count=%u | expected=0", names->len);
-  g_assert_nonnull (names);
+  ok = cz_custom_label_store_add_category_label_name (store, "Games", "Wishlist");
+  g_test_message ("DIAG:action=cat-name-add | category=Games | name=Wishlist | ok=%d | expected=1", ok);
+  g_assert_true (ok);
+
+  ok = cz_custom_label_store_add_category_label_name (store, "Games", "Wishlist");
+  g_test_message ("DIAG:action=cat-name-dup | category=Games | name=Wishlist | ok=%d | expected=0", ok);
+  g_assert_false (ok);
+
+  names = cz_custom_label_store_get_category_label_names (store, "Games");
+  found = g_ptr_array_find_with_equal_func (names, "Wishlist", g_str_equal, NULL);
+  g_test_message ("DIAG:action=cat-name-get | category=Games | count=%u | found_Wishlist=%d",
+                  names->len, found);
+  g_assert_cmpuint (names->len, ==, 1);
+  g_assert_true (found);
+  g_ptr_array_unref (names);
+
+  ok = cz_custom_label_store_remove_category_label_name (store, "Games", "Wishlist");
+  g_test_message ("DIAG:action=cat-name-remove | category=Games | name=Wishlist | ok=%d | expected=1", ok);
+  g_assert_true (ok);
+
+  ok = cz_custom_label_store_remove_category_label_name (store, "Games", "Wishlist");
+  g_test_message ("DIAG:action=cat-name-remove-again | category=Games | name=Wishlist | ok=%d | expected=0", ok);
+  g_assert_false (ok);
+
+  names = cz_custom_label_store_get_category_label_names (store, "Games");
+  g_test_message ("DIAG:action=cat-name-get-after | category=Games | count=%u | expected=0", names->len);
   g_assert_cmpuint (names->len, ==, 0);
   g_ptr_array_unref (names);
 
   g_object_unref (store);
+}
+
+static void
+test_custom_category_names_isolated_per_category (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  GPtrArray *names_games;
+  GPtrArray *names_apps;
+
+  cz_custom_label_store_add_category_label_name (store, "Games", "Wishlist");
+  cz_custom_label_store_add_category_label_name (store, "Apps", "Wishlist");
+
+  names_games = cz_custom_label_store_get_category_label_names (store, "Games");
+  names_apps  = cz_custom_label_store_get_category_label_names (store, "Apps");
+  g_test_message ("DIAG:action=cat-names-isolated | games=%u | apps=%u",
+                  names_games->len, names_apps->len);
+  g_assert_cmpuint (names_games->len, ==, 1);
+  g_assert_cmpuint (names_apps->len, ==, 1);
+  g_ptr_array_unref (names_games);
+  g_ptr_array_unref (names_apps);
+
+  cz_custom_label_store_remove_category_label_name (store, "Games", "Wishlist");
+
+  names_games = cz_custom_label_store_get_category_label_names (store, "Games");
+  names_apps  = cz_custom_label_store_get_category_label_names (store, "Apps");
+  g_test_message ("DIAG:action=cat-names-isolated-after | games=%u | expected=0 | apps=%u | expected=1",
+                  names_games->len, names_apps->len);
+  g_assert_cmpuint (names_games->len, ==, 0);
+  g_assert_cmpuint (names_apps->len, ==, 1);
+  g_ptr_array_unref (names_games);
+  g_ptr_array_unref (names_apps);
+
+  g_object_unref (store);
+}
+
+static void
+test_remove_category_name_cascades_assignments (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  const char *got;
+
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", "Wishlist");
+  cz_custom_label_store_add_category_label_name (store, "Games", "Wishlist");
+
+  cz_custom_label_store_remove_category_label_name (store, "Games", "Wishlist");
+
+  got = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
+  g_test_message ("DIAG:action=cat-name-cascade | app=org.test.App1 | label=%s | expected=null",
+                  got ? got : "(null)");
+  g_assert_null (got);
+
+  g_object_unref (store);
+}
+
+static void
+test_count_category_label_assignments (void)
+{
+  CzCustomLabelStore *store = cz_custom_label_store_new ();
+  guint count;
+
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App1",
+                                              "Games", "Wishlist");
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App2",
+                                              "Games", "Wishlist");
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App3",
+                                              "Games", "Daily");
+  cz_custom_label_store_set_app_custom_label (store, "org.test.App4",
+                                              "Apps", "Wishlist");
+
+  count = cz_custom_label_store_count_category_label_assignments (
+      store, "Games", "Wishlist");
+  g_test_message ("DIAG:action=count | category=Games | name=Wishlist | count=%u | expected=2", count);
+  g_assert_cmpuint (count, ==, 2);
+
+  count = cz_custom_label_store_count_category_label_assignments (
+      store, "Games", "Daily");
+  g_test_message ("DIAG:action=count | category=Games | name=Daily | count=%u | expected=1", count);
+  g_assert_cmpuint (count, ==, 1);
+
+  count = cz_custom_label_store_count_category_label_assignments (
+      store, "Apps", "Wishlist");
+  g_test_message ("DIAG:action=count | category=Apps | name=Wishlist | count=%u | expected=1", count);
+  g_assert_cmpuint (count, ==, 1);
+
+  count = cz_custom_label_store_count_category_label_assignments (
+      store, "Games", "Missing");
+  g_test_message ("DIAG:action=count | category=Games | name=Missing | count=%u | expected=0", count);
+  g_assert_cmpuint (count, ==, 0);
+
+  g_object_unref (store);
+}
+
+static void
+test_per_category_roundtrip_save_load (void)
+{
+  CzCustomLabelStore *s1 = make_loaded_store ();
+  CzCustomLabelStore *s2;
+  char               *path = temp_path ();
+  gboolean            ok;
+
+  g_remove (path);
+
+  cz_custom_label_store_set_app_custom_label (s1, "org.test.App1",
+                                              "Games", "Wishlist");
+  cz_custom_label_store_set_app_custom_label (s1, "org.test.App2",
+                                              "Games", "Daily");
+  cz_custom_label_store_add_category_label_name (s1, "Games", "Wishlist");
+  cz_custom_label_store_add_category_label_name (s1, "Games", "Daily");
+  cz_custom_label_store_add_category_label_name (s1, "Apps", "Wishlist");
+
+  ok = cz_custom_label_store_save_to_path (s1, path);
+  g_test_message ("DIAG:action=per-cat-save | ok=%d", ok);
+  g_assert_true (ok);
+  g_object_unref (s1);
+
+  s2 = cz_custom_label_store_new ();
+  ok = cz_custom_label_store_load_from_path (s2, path);
+  g_test_message ("DIAG:action=per-cat-load | ok=%d", ok);
+  g_assert_true (ok);
+
+  {
+    const char *l1 = cz_custom_label_store_get_app_custom_label (s2, "org.test.App1");
+    const char *c1 = cz_custom_label_store_get_app_custom_category (s2, "org.test.App1");
+    const char *l2 = cz_custom_label_store_get_app_custom_label (s2, "org.test.App2");
+    GPtrArray  *games = cz_custom_label_store_get_category_label_names (s2, "Games");
+    GPtrArray  *apps  = cz_custom_label_store_get_category_label_names (s2, "Apps");
+    gboolean    fg1 = g_ptr_array_find_with_equal_func (games, "Wishlist", g_str_equal, NULL);
+    gboolean    fg2 = g_ptr_array_find_with_equal_func (games, "Daily", g_str_equal, NULL);
+    gboolean    fa  = g_ptr_array_find_with_equal_func (apps, "Wishlist", g_str_equal, NULL);
+
+    g_test_message ("DIAG:action=per-cat-verify"
+                    " | app1=%s | app1_cat=%s | app2=%s"
+                    " | games=%u | has_Wishlist=%d | has_Daily=%d | apps=%u | has_Wishlist=%d",
+                    l1 ? l1 : "(null)", c1 ? c1 : "(null)",
+                    l2 ? l2 : "(null)",
+                    games->len, fg1, fg2, apps->len, fa);
+    g_assert_cmpstr (l1, ==, "Wishlist");
+    g_assert_cmpstr (c1, ==, "Games");
+    g_assert_cmpstr (l2, ==, "Daily");
+    g_assert_cmpuint (games->len, ==, 2);
+    g_assert_true (fg1);
+    g_assert_true (fg2);
+    g_assert_cmpuint (apps->len, ==, 1);
+    g_assert_true (fa);
+
+    g_ptr_array_unref (games);
+    g_ptr_array_unref (apps);
+  }
+
+  g_object_unref (s2);
+  cleanup (path);
+  g_free (path);
 }
 
 /* ------------------------------------------------------------------ */
@@ -690,7 +692,6 @@ test_load_corrupt_primary_with_backup (void)
   /* Save valid store — creates primary + backup in <dir>/backups/ */
   s1 = cz_custom_label_store_new ();
   cz_custom_label_store_set_core_label (s1, "org.test.App1", "Install");
-  cz_custom_label_store_add_noncore_label (s1, "org.test.App1", "Test1");
   ok = cz_custom_label_store_save_to_path (s1, path);
   g_assert_true (ok);
   g_object_unref (s1);
@@ -705,14 +706,10 @@ test_load_corrupt_primary_with_backup (void)
   g_assert_true (ok);
 
   {
-    const char *l  = cz_custom_label_store_get_core_label (s2, "org.test.App1");
-    gboolean    h  = cz_custom_label_store_has_noncore_label (s2, "org.test.App1", "Test1");
-    g_test_message ("DIAG:action=verify-backup-content"
-                    " | core=%s | expected=Install"
-                    " | has_Test1=%d | expected=1",
-                    l ? l : "(null)", h);
+    const char *l = cz_custom_label_store_get_core_label (s2, "org.test.App1");
+    g_test_message ("DIAG:action=verify-backup-content | core=%s | expected=Install",
+                    l ? l : "(null)");
     g_assert_cmpstr (l, ==, "Install");
-    g_assert_true (h);
   }
 
   g_object_unref (s2);
@@ -757,12 +754,12 @@ test_load_corrupt_primary_no_backup (void)
   /* Store should still work (internal state is consistent) */
   {
     const char *l = cz_custom_label_store_get_core_label (store, "org.test.Any");
-    gboolean    h = cz_custom_label_store_has_noncore_label (store, "org.test.Any", "x");
+    const char *c = cz_custom_label_store_get_app_custom_label (store, "org.test.Any");
     g_test_message ("DIAG:action=verify-store-healthy | default_core=%s | expected=New"
-                    " | has_any_noncore=%d | expected=0",
-                    l, h);
+                    " | custom_label=%s | expected=null",
+                    l, c ? c : "(null)");
     g_assert_cmpstr (l, ==, "New");
-    g_assert_false (h);
+    g_assert_null (c);
   }
 
   g_object_unref (store);
@@ -803,13 +800,13 @@ test_load_empty_core_and_noncore (void)
   g_assert_true (ok);
 
   {
-    const char *l  = cz_custom_label_store_get_core_label (store, "org.test.App1");
-    gboolean    h  = cz_custom_label_store_has_noncore_label (store, "org.test.App1", "x");
+    const char *l = cz_custom_label_store_get_core_label (store, "org.test.App1");
+    const char *c = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
     g_test_message ("DIAG:action=verify-empty-core-noncore"
-                    " | core=%s | expected=New | has_noncore=%d | expected=0",
-                    l ? l : "(null)", h);
+                    " | core=%s | expected=New | custom_label=%s | expected=null",
+                    l ? l : "(null)", c ? c : "(null)");
     g_assert_cmpstr (l, ==, "New");
-    g_assert_false (h);
+    g_assert_null (c);
   }
 
   g_object_unref (store);
@@ -857,14 +854,14 @@ test_load_empty_core_with_noncore_data (void)
   g_assert_true (ok);
 
   {
-    const char *l  = cz_custom_label_store_get_core_label (store, "org.test.App1");
-    gboolean    h  = cz_custom_label_store_has_noncore_label (store, "org.test.App1", "Test1");
+    const char *l = cz_custom_label_store_get_core_label (store, "org.test.App1");
+    const char *c = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
     g_test_message ("DIAG:action=verify-empty-core-with-noncore"
                     " | core=%s | expected=New"
-                    " | has_Test1=%d | expected=1",
-                    l ? l : "(null)", h);
+                    " | custom_label=%s | expected=null",
+                    l ? l : "(null)", c ? c : "(null)");
     g_assert_cmpstr (l, ==, "New");
-    g_assert_true (h);
+    g_assert_null (c);
   }
 
   g_object_unref (store);
@@ -909,14 +906,14 @@ test_load_missing_noncore_key (void)
   g_assert_true (ok);
 
   {
-    const char *l  = cz_custom_label_store_get_core_label (store, "org.test.App1");
-    gboolean    h  = cz_custom_label_store_has_noncore_label (store, "org.test.App1", "x");
+    const char *l = cz_custom_label_store_get_core_label (store, "org.test.App1");
+    const char *c = cz_custom_label_store_get_app_custom_label (store, "org.test.App1");
     g_test_message ("DIAG:action=verify-missing-noncore"
                     " | core=%s | expected=Install"
-                    " | has_noncore=%d | expected=0",
-                    l ? l : "(null)", h);
+                    " | custom_label=%s | expected=null",
+                    l ? l : "(null)", c ? c : "(null)");
     g_assert_cmpstr (l, ==, "Install");
-    g_assert_false (h);
+    g_assert_null (c);
   }
 
   g_object_unref (store);
@@ -949,10 +946,6 @@ main (int argc, char *argv[])
                     test_core_default_returned_for_unknown);
   g_test_add_func ("/cz-custom-label-store/get-set-core-label",
                     test_get_set_core_label);
-  g_test_add_func ("/cz-custom-label-store/noncore-add-has-remove",
-                    test_noncore_add_has_remove);
-  g_test_add_func ("/cz-custom-label-store/noncore-labels-isolated",
-                    test_noncore_labels_isolated_per_app);
   g_test_add_func ("/cz-custom-label-store/ensure-app-ids-creates",
                     test_ensure_app_ids_creates_missing);
   g_test_add_func ("/cz-custom-label-store/ensure-app-ids-keeps",
@@ -963,28 +956,32 @@ main (int argc, char *argv[])
                     test_load_nonexistent_path_returns_true);
   g_test_add_func ("/cz-custom-label-store/save-empty-roundtrip",
                     test_save_empty_store_roundtrip);
-  g_test_add_func ("/cz-custom-label-store/get-all-noncore-names",
-                    test_get_all_noncore_label_names);
   g_test_add_func ("/cz-custom-label-store/core-labels-isolated",
                      test_core_labels_isolated_per_app);
 
-  /* Noncore label name API */
-  g_test_add_func ("/cz-custom-label-store/add-name-new",
-                     test_add_noncore_label_name_new);
-  g_test_add_func ("/cz-custom-label-store/add-name-duplicate",
-                     test_add_noncore_label_name_duplicate);
-  g_test_add_func ("/cz-custom-label-store/remove-name-existing",
-                     test_remove_noncore_label_name_existing);
-  g_test_add_func ("/cz-custom-label-store/remove-name-nonexistent",
-                     test_remove_noncore_label_name_nonexistent);
-  g_test_add_func ("/cz-custom-label-store/remove-cleans-up-per-app",
-                     test_remove_cleans_up_per_app_assignments);
-  g_test_add_func ("/cz-custom-label-store/names-roundtrip-save-load",
-                     test_noncore_label_names_roundtrip_save_load);
+  /* Legacy backward compatibility: per-app noncore rows survive a save */
   g_test_add_func ("/cz-custom-label-store/names-backward-compat",
                      test_noncore_label_names_backward_compat);
-  g_test_add_func ("/cz-custom-label-store/names-new-store-empty",
-                     test_noncore_label_names_new_store_empty);
+
+  /* Per-category mono API */
+  g_test_add_func ("/cz-custom-label-store/custom-unlabeled-default",
+                     test_custom_label_unlabeled_default);
+  g_test_add_func ("/cz-custom-label-store/custom-set-get",
+                     test_custom_label_set_get);
+  g_test_add_func ("/cz-custom-label-store/custom-clear",
+                     test_custom_label_clear);
+  g_test_add_func ("/cz-custom-label-store/custom-isolated-per-app",
+                     test_custom_label_isolated_per_app);
+  g_test_add_func ("/cz-custom-label-store/custom-cat-names-add-dup-remove",
+                     test_custom_category_names_add_dup_remove);
+  g_test_add_func ("/cz-custom-label-store/custom-cat-names-isolated",
+                     test_custom_category_names_isolated_per_category);
+  g_test_add_func ("/cz-custom-label-store/custom-remove-cascades",
+                     test_remove_category_name_cascades_assignments);
+  g_test_add_func ("/cz-custom-label-store/custom-count-assignments",
+                     test_count_category_label_assignments);
+  g_test_add_func ("/cz-custom-label-store/custom-roundtrip-save-load",
+                     test_per_category_roundtrip_save_load);
 
   /* Failure-condition tests */
   g_test_add_func ("/cz-custom-label-store/load-corrupt-primary-with-backup",

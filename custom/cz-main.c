@@ -54,20 +54,6 @@ find_widget_by_type (GtkWidget *widget, GType type)
   return NULL;
 }
 
-static void
-noncore_name_added_cb (const char *name, gpointer data)
-{
-  cz_custom_label_store_add_noncore_label_name (
-      CZ_CUSTOM_LABEL_STORE (data), name);
-}
-
-static void
-noncore_name_removed_cb (const char *name, gpointer data)
-{
-  cz_custom_label_store_remove_noncore_label_name (
-      CZ_CUSTOM_LABEL_STORE (data), name);
-}
-
 static gboolean
 on_idle_add_tab (gpointer data)
 {
@@ -95,17 +81,11 @@ on_idle_add_tab (gpointer data)
       ADW_VIEW_STACK (view_stack),
       custom_page, "custom", _("Custom"), "preferences-other-symbolic");
 
-  /* Hand the custom-label store to the window via callbacks so add/delete
-   * events update the store in real time (no src/ → custom/ header dep). */
-  {
-    CzCustomLabelStore *store
-        = cz_custom_page_get_label_store (CZ_CUSTOM_PAGE (custom_page));
-    bz_window_set_custom_label_callbacks (
-        BZ_WINDOW (window),
-        noncore_name_added_cb,
-        noncore_name_removed_cb,
-        store);
-  }
+  /* Hand the shared custom-label store to the window so its hamburger label
+   * manager reads/writes per-category names and the full view stays live. */
+  bz_window_set_custom_label_store (
+      BZ_WINDOW (window),
+      cz_custom_page_get_label_store (CZ_CUSTOM_PAGE (custom_page)));
 
   return G_SOURCE_REMOVE;  /* Done, don't retry */
 

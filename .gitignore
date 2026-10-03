@@ -1,2 +1,13 @@
 build
 .cache
+
+# agent/session metadata, not source
+.threadbridge/
+
+# agent/session metadata, not source
+.threadbridge/
+# editor/build backup files
+*.backup
+*.test
+meson.build.backup
+meson.build.test

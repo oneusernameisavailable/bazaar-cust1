@@ -80,6 +80,19 @@ open_store (void)
   return store;
 }
 
+/* Open the per-category label facade — a fresh in-memory cache over the
+ * same store_path the seeded rows live in.  Tests hand this instance to
+ * the widget under test so the facade cache and the widget stay in sync. */
+static CzCustomLabelStore *
+open_facade (void)
+{
+  CzCustomLabelStore *store;
+
+  store = cz_custom_label_store_new ();
+  g_assert_true (cz_custom_label_store_load_from_path (store, store_path));
+  return store;
+}
+
 /* Recursively remove a directory tree. */
 static void
 remove_dir_tree (const char *dir)
@@ -146,25 +159,31 @@ seed_core_labels (const char * const *app_ids,
   bz_label_store_close (store);
 }
 
+/* Seed a per-category label name into the store (new per-category schema). */
 static void
-seed_label_name (const char *name)
+seed_category_label_name (const char *category,
+                          const char *name)
 {
   BzLabelStore *store;
 
   store = open_store ();
-  g_assert_true (bz_label_store_add_label_name (store, name, NULL));
+  g_assert_true (bz_label_store_add_category_label_name (store, category,
+                                                         name, NULL));
   bz_label_store_close (store);
 }
 
+/* Seed a per-category custom-label assignment into the store. */
 static void
-seed_noncore_assignment (const char *app_id,
-                         const char *label)
+seed_custom_assignment (const char *app_id,
+                        const char *category,
+                        const char *label)
 {
   BzLabelStore *store;
 
   store = open_store ();
-  g_assert_true (bz_label_store_add_noncore_label (store, app_id,
-                                                   label, NULL));
+  g_assert_true (bz_label_store_set_app_custom_label (store, app_id,
+                                                      category, label,
+                                                      NULL));
   bz_label_store_close (store);
 }
 
@@ -179,40 +198,6 @@ read_core_label (const char *app_id)
   result = bz_label_store_get_core_label (store, app_id);
   bz_label_store_close (store);
   return result;
-}
-
-static gboolean
-read_has_noncore (const char *app_id,
-                  const char *label)
-{
-  BzLabelStore *store;
-  gboolean      result;
-
-  store  = open_store ();
-  result = bz_label_store_has_noncore_label (store, app_id, label);
-  bz_label_store_close (store);
-  return result;
-}
-
-static gboolean
-read_has_label_name (const char *name)
-{
-  BzLabelStore *store;
-  char        **names;
-  gboolean      found;
-  guint         i;
-
-  store = open_store ();
-  names = bz_label_store_get_all_label_names (store);
-  found = FALSE;
-  for (i = 0; names != NULL && names[i] != NULL; i++)
-    {
-      if (g_strcmp0 (names[i], name) == 0)
-        found = TRUE;
-    }
-  g_strfreev (names);
-  bz_label_store_close (store);
-  return found;
 }
 
 /* Depth-first search for a GtkMenuButton (there should be exactly one in a
@@ -1293,39 +1278,44 @@ test_full_view_load_corrupt_store (void)
   g_clear_object (&full_view);
 }
 
-/* Test 9 – bz_label_store_set_core_label in BzFullView preserves noncore
- * data from a store that has noncore but no core entries for the current app.
- * Simulates: store has noncore data for App1 but only other apps'
- * core data; clicking a label creates a new core entry for App1 without
- * destroying the existing noncore data.
+/* Test 9 – saving a core label in BzFullView preserves per-category
+ * custom data from a store that has custom but no core entries for the
+ * current app.  Simulates: store has custom data for App1 but only other
+ * apps' core data; clicking a label creates a new core entry for App1
+ * without destroying the existing per-category custom data.
  */
 static void
 test_save_preserves_existing_noncore (void)
 {
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *box;
-  GtkWidget    *btn_install;
-  GtkWidget    *win;
-  char          *stored;
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  CzCustomLabelStore *fresh;
+  GtkWidget          *box;
+  GtkWidget          *btn_install;
+  GtkWidget          *win;
+  char               *stored;
 
-  /* Seed a store with noncore data for App1 + core data for App2,
-   * but NO core entry for App1. */
+  /* Seed a store with per-category custom data for App1 + core data for
+   * App2, but NO core entry for App1. */
   seed_core_labels (
       (const char *[]) { "org.test.App2", NULL },
       (const char *[]) { "Forget it", NULL }, 1);
-  seed_label_name ("MyTag");
-  seed_noncore_assignment ("org.test.App1", "MyTag");
+  seed_category_label_name ("trending", "MyTag");
+  seed_custom_assignment ("org.test.App1", "trending", "MyTag");
 
   full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
   g_assert_nonnull (full_view);
   win = host_full_view (full_view);
 
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
+
   group = make_entry_group ("org.test.App1");
   bz_full_view_set_entry_group (full_view, group);
   g_object_unref (group);
 
-  /* Click "Install" to trigger save_core_labels */
+  /* Click "Install" to trigger the core save path */
   box = get_popover_box (full_view);
   btn_install = find_button_by_label (box, "Install");
   g_assert_nonnull (btn_install);
@@ -1339,12 +1329,22 @@ test_save_preserves_existing_noncore (void)
   g_assert_cmpstr (stored, ==, "Install");
   g_free (stored);
 
-  /* Verify noncore data for App1 is preserved ("MyTag" is still there) */
+  /* Verify per-category custom data for App1 is preserved ("MyTag") */
   g_test_message ("DIAG:action=verify-noncore-preserved"
-                  " | app1_has_MyTag=%d | expected=1",
-                  read_has_noncore ("org.test.App1", "MyTag"));
-  g_assert_true (read_has_noncore ("org.test.App1", "MyTag"));
+                  " | app1_label=%s | expected=MyTag",
+                  cz_custom_label_store_get_app_custom_label (
+                      store, "org.test.App1"));
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_label (
+                       store, "org.test.App1"), ==, "MyTag");
 
+  /* Re-read from disk through a FRESH store: the core save above must not
+   * have rewritten the custom tables underneath the in-memory cache. */
+  fresh = open_facade ();
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_label (
+                       fresh, "org.test.App1"), ==, "MyTag");
+  g_object_unref (fresh);
+
+  g_object_unref (store);
   g_object_ref_sink (full_view);
   gtk_window_destroy (GTK_WINDOW (win));
   g_clear_object (&full_view);
@@ -1425,21 +1425,28 @@ get_noncore_popover_box (BzFullView *full_view)
   return box;
 }
 
-/* Test: BzFullView noncore popover contains "None" button when
- * the store has no label names and no assignment exists. */
+/* Test: BzFullView noncore popover offers exactly the active "Unlabeled"
+ * radio when the app's category has no label names and no assignment. */
 static void
 test_noncore_popover_empty (void)
 {
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *box;
-  GtkWidget    *win;
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  GtkWidget          *box;
+  GtkWidget          *unlabeled;
+  GtkWidget          *win;
 
   wipe_store ();
+  g_application_set_default (NULL);
+  setup_test_state ();
 
   full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
   g_assert_nonnull (full_view);
   win = host_full_view (full_view);
+
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
 
   group = make_entry_group ("org.test.App1");
   bz_full_view_set_entry_group (full_view, group);
@@ -1448,41 +1455,50 @@ test_noncore_popover_empty (void)
   box = get_noncore_popover_box (full_view);
   g_assert_nonnull (box);
 
-  /* Empty store: no label names → "No custom labels defined" label */
-  {
-    GtkWidget *empty_label = find_label_in_tree (box, "No custom labels defined");
-    g_test_message ("DIAG:noncore-popover-empty | empty_label=%p", (void *) empty_label);
-    g_assert_nonnull (empty_label);
-  }
+  /* Empty category: the "Unlabeled" row is present and it is active. */
+  unlabeled = find_check_button_by_label (box, "Unlabeled");
+  g_test_message ("DIAG:noncore-popover-empty | unlabeled=%p",
+                  (void *) unlabeled);
+  g_assert_nonnull (unlabeled);
+  g_assert_true (GTK_IS_CHECK_BUTTON (unlabeled));
+  g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (unlabeled)));
 
-  /* No checkbuttons should exist when store is empty */
+  /* No label rows exist when the store has nothing for the category. */
   {
     GtkWidget *tag_a = find_check_button_by_label (box, "TagA");
     g_assert_null (tag_a);
   }
 
+  g_object_unref (store);
   g_object_ref_sink (full_view);
   gtk_window_destroy (GTK_WINDOW (win));
   g_clear_object (&full_view);
 }
 
-/* Test: BzFullView noncore popover shows GtkCheckButtons for each
- * label name from the store. */
+/* Test: BzFullView noncore popover shows Unlabeled plus a GtkCheckButton
+ * radio per label name registered in the app's category. */
 static void
 test_noncore_popover_with_names (void)
 {
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *box;
-  GtkWidget    *win;
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  GtkWidget          *box;
+  GtkWidget          *win;
 
-  /* Seed label names: TagA, TagB */
-  seed_label_name ("TagA");
-  seed_label_name ("TagB");
+  wipe_store ();
+  g_application_set_default (NULL);
+  setup_test_state ();
+  /* Seed label names in the category App1 resolves to (trending). */
+  seed_category_label_name ("trending", "TagA");
+  seed_category_label_name ("trending", "TagB");
 
   full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
   g_assert_nonnull (full_view);
   win = host_full_view (full_view);
+
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
 
   group = make_entry_group ("org.test.App1");
   bz_full_view_set_entry_group (full_view, group);
@@ -1491,39 +1507,56 @@ test_noncore_popover_with_names (void)
   box = get_noncore_popover_box (full_view);
 
   {
+    GtkWidget *unlabeled = find_check_button_by_label (box, "Unlabeled");
     GtkWidget *tag_a_btn = find_check_button_by_label (box, "TagA");
     GtkWidget *tag_b_btn = find_check_button_by_label (box, "TagB");
     g_test_message ("DIAG:noncore-popover-names"
-                    " | TagA=%p | TagB=%p",
-                    (void *) tag_a_btn, (void *) tag_b_btn);
+                    " | unlabeled=%p | TagA=%p | TagB=%p",
+                    (void *) unlabeled, (void *) tag_a_btn,
+                    (void *) tag_b_btn);
+    g_assert_nonnull (unlabeled);
     g_assert_nonnull (tag_a_btn);
     g_assert_nonnull (tag_b_btn);
     g_assert_true (GTK_IS_CHECK_BUTTON (tag_a_btn));
     g_assert_true (GTK_IS_CHECK_BUTTON (tag_b_btn));
+    /* No assignment yet → the default "Unlabeled" row is active. */
+    g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (unlabeled)));
+    g_assert_false (gtk_check_button_get_active (GTK_CHECK_BUTTON (tag_a_btn)));
+    g_assert_false (gtk_check_button_get_active (GTK_CHECK_BUTTON (tag_b_btn)));
   }
 
+  g_object_unref (store);
   g_object_ref_sink (full_view);
   gtk_window_destroy (GTK_WINDOW (win));
   g_clear_object (&full_view);
 }
 
-/* Test: BzFullView noncore assign — toggling a GtkCheckButton active
- * persists the label to the store and adds suggested-action CSS. */
+/* Test: BzFullView noncore assign — activating a row radio persists a mono
+ * assignment through the shared facade, and selecting another row replaces
+ * it (the previous row deactivates). */
 static void
 test_noncore_assign_persists (void)
 {
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *box;
-  GtkWidget    *btn_tag_a;
-  GtkWidget    *win;
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  GtkWidget          *box;
+  GtkWidget          *btn_tag_a;
+  GtkWidget          *btn_tag_b;
+  GtkWidget          *win;
 
-  /* Seed label name: TagA */
-  seed_label_name ("TagA");
+  wipe_store ();
+  g_application_set_default (NULL);
+  setup_test_state ();
+  seed_category_label_name ("trending", "TagA");
+  seed_category_label_name ("trending", "TagB");
 
   full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
   g_assert_nonnull (full_view);
   win = host_full_view (full_view);
+
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
 
   group = make_entry_group ("org.test.App1");
   bz_full_view_set_entry_group (full_view, group);
@@ -1531,97 +1564,154 @@ test_noncore_assign_persists (void)
 
   box = get_noncore_popover_box (full_view);
   btn_tag_a = find_check_button_by_label (box, "TagA");
+  btn_tag_b = find_check_button_by_label (box, "TagB");
   g_assert_nonnull (btn_tag_a);
-  g_assert_true (GTK_IS_CHECK_BUTTON (btn_tag_a));
+  g_assert_nonnull (btn_tag_b);
 
-  g_test_message ("DIAG:noncore-before-assign"
-                  " | tagA_active=%d | tagA_suggested=%d",
-                  gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_a)),
-                  gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
-
-  /* Initially unchecked, no suggested-action */
+  /* Initially inactive; the default "Unlabeled" row carries the selection. */
   g_assert_false (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_a)));
   g_assert_false (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
 
-  /* Toggle checkbutton active to assign */
+  /* Activate TagA → write App1/trending/TagA through the shared facade. */
   gtk_check_button_set_active (GTK_CHECK_BUTTON (btn_tag_a), TRUE);
   process_events ();
 
-  /* Verify store: App1 has noncore=["TagA"] */
   g_test_message ("DIAG:noncore-after-assign"
-                  " | app1_has_TagA=%d | expected=1",
-                  read_has_noncore ("org.test.App1", "TagA"));
-  g_assert_true (read_has_noncore ("org.test.App1", "TagA"));
-  g_assert_true (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
+                  " | app1_label=%s | expected=TagA",
+                  cz_custom_label_store_get_app_custom_label (store,
+                                                              "org.test.App1"));
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_label (
+                       store, "org.test.App1"), ==, "TagA");
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_category (
+                       store, "org.test.App1"), ==, "trending");
 
-  g_object_ref_sink (full_view);
-  gtk_window_destroy (GTK_WINDOW (win));
-  g_clear_object (&full_view);
-}
-
-/* Test: BzFullView noncore unassign — toggling a GtkCheckButton inactive
- * removes the label from the store and drops suggested-action CSS. */
-static void
-test_noncore_unassign (void)
-{
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *box;
-  GtkWidget    *btn_tag_a;
-  GtkWidget    *win;
-
-  /* Seed: App1 already assigned "TagA" + label name registered */
-  seed_label_name ("TagA");
-  seed_noncore_assignment ("org.test.App1", "TagA");
-
-  full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
-  g_assert_nonnull (full_view);
-  win = host_full_view (full_view);
-
-  group = make_entry_group ("org.test.App1");
-  bz_full_view_set_entry_group (full_view, group);
-  g_object_unref (group);
-
+  /* The popover rebuilds on change, so re-fetch the row widgets. */
   box = get_noncore_popover_box (full_view);
   btn_tag_a = find_check_button_by_label (box, "TagA");
   g_assert_nonnull (btn_tag_a);
-  g_assert_true (GTK_IS_CHECK_BUTTON (btn_tag_a));
-
-  /* Initially checked (seeded assignment) with suggested-action */
   g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_a)));
   g_assert_true (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
 
-  /* Toggle checkbutton inactive to unassign */
-  gtk_check_button_set_active (GTK_CHECK_BUTTON (btn_tag_a), FALSE);
+  /* Mono-select: activating TagB replaces TagA instead of adding to it. */
+  btn_tag_b = find_check_button_by_label (box, "TagB");
+  g_assert_nonnull (btn_tag_b);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (btn_tag_b), TRUE);
   process_events ();
 
-  /* Verify store: App1 no longer has TagA */
-  g_test_message ("DIAG:noncore-after-unassign"
-                  " | app1_has_TagA=%d | expected=0",
-                  read_has_noncore ("org.test.App1", "TagA"));
-  g_assert_false (read_has_noncore ("org.test.App1", "TagA"));
-  g_assert_false (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
+  g_test_message ("DIAG:noncore-after-switch"
+                  " | app1_label=%s | expected=TagB",
+                  cz_custom_label_store_get_app_custom_label (store,
+                                                              "org.test.App1"));
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_label (
+                       store, "org.test.App1"), ==, "TagB");
 
+  box = get_noncore_popover_box (full_view);
+  btn_tag_a = find_check_button_by_label (box, "TagA");
+  btn_tag_b = find_check_button_by_label (box, "TagB");
+  g_assert_nonnull (btn_tag_a);
+  g_assert_nonnull (btn_tag_b);
+  g_assert_false (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_a)));
+  g_assert_false (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
+  g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_b)));
+  g_assert_true (gtk_widget_has_css_class (btn_tag_b, "suggested-action"));
+
+  g_object_unref (store);
   g_object_ref_sink (full_view);
   gtk_window_destroy (GTK_WINDOW (win));
   g_clear_object (&full_view);
 }
 
-/* Test: BzFullView noncore — empty store shows "No custom labels defined"
- * label and no checkboxes have suggested-action. */
+/* Test: BzFullView noncore unassign — activating the "Unlabeled" row
+ * clears the app's assignment (no row is stored). */
 static void
-test_noncore_default_none_selected (void)
+test_noncore_unassign (void)
 {
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *box;
-  GtkWidget    *win;
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  GtkWidget          *box;
+  GtkWidget          *btn_unlabeled;
+  GtkWidget          *btn_tag_a;
+  GtkWidget          *win;
 
   wipe_store ();
+  g_application_set_default (NULL);
+  setup_test_state ();
+  /* Seed: App1 already assigned "TagA" in trending. */
+  seed_category_label_name ("trending", "TagA");
+  seed_custom_assignment ("org.test.App1", "trending", "TagA");
 
   full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
   g_assert_nonnull (full_view);
   win = host_full_view (full_view);
+
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
+
+  group = make_entry_group ("org.test.App1");
+  bz_full_view_set_entry_group (full_view, group);
+  g_object_unref (group);
+
+  box = get_noncore_popover_box (full_view);
+  btn_unlabeled = find_check_button_by_label (box, "Unlabeled");
+  btn_tag_a = find_check_button_by_label (box, "TagA");
+  g_assert_nonnull (btn_unlabeled);
+  g_assert_nonnull (btn_tag_a);
+  g_assert_true (GTK_IS_CHECK_BUTTON (btn_tag_a));
+
+  /* Seeded assignment shows TagA active on the mono radio. */
+  g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_a)));
+  g_assert_true (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
+  g_assert_false (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_unlabeled)));
+
+  /* Click "Unlabeled" → clear the assignment (absence of a row). */
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (btn_unlabeled), TRUE);
+  process_events ();
+
+  g_test_message ("DIAG:noncore-after-unassign"
+                  " | app1_label=%s | expected=(null)",
+                  cz_custom_label_store_get_app_custom_label (store,
+                                                              "org.test.App1"));
+  g_assert_null (cz_custom_label_store_get_app_custom_label (
+                     store, "org.test.App1"));
+
+  box = get_noncore_popover_box (full_view);
+  btn_unlabeled = find_check_button_by_label (box, "Unlabeled");
+  btn_tag_a = find_check_button_by_label (box, "TagA");
+  g_assert_nonnull (btn_unlabeled);
+  g_assert_nonnull (btn_tag_a);
+  g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_unlabeled)));
+  g_assert_false (gtk_check_button_get_active (GTK_CHECK_BUTTON (btn_tag_a)));
+  g_assert_false (gtk_widget_has_css_class (btn_tag_a, "suggested-action"));
+
+  g_object_unref (store);
+  g_object_ref_sink (full_view);
+  gtk_window_destroy (GTK_WINDOW (win));
+  g_clear_object (&full_view);
+}
+
+/* Test: BzFullView noncore — with no assignment, the "Unlabeled" default
+ * row carries the selection and no other rows are active. */
+static void
+test_noncore_default_none_selected (void)
+{
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  GtkWidget          *box;
+  GtkWidget          *unlabeled;
+  GtkWidget          *win;
+
+  wipe_store ();
+  g_application_set_default (NULL);
+  setup_test_state ();
+
+  full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
+  g_assert_nonnull (full_view);
+  win = host_full_view (full_view);
+
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
 
   group = make_entry_group ("org.test.App1");
   bz_full_view_set_entry_group (full_view, group);
@@ -1629,46 +1719,58 @@ test_noncore_default_none_selected (void)
 
   box = get_noncore_popover_box (full_view);
 
-  /* Empty store: "No custom labels defined" label */
-  {
-    GtkWidget *empty_label = find_label_in_tree (box, "No custom labels defined");
-    g_test_message ("DIAG:noncore-default-selection"
-                    " | empty_label=%p", (void *) empty_label);
-    g_assert_nonnull (empty_label);
-  }
+  /* Empty store: the "Unlabeled" default row exists and is selected. */
+  unlabeled = find_check_button_by_label (box, "Unlabeled");
+  g_test_message ("DIAG:noncore-default-selection"
+                  " | unlabeled=%p", (void *) unlabeled);
+  g_assert_nonnull (unlabeled);
+  g_assert_true (gtk_check_button_get_active (GTK_CHECK_BUTTON (unlabeled)));
 
-  /* No checkbuttons exist at all in the empty state */
+  /* No label rows exist at all in the empty state. */
   {
     GtkWidget *any_check = find_check_button_by_label (box, "TagA");
     g_assert_null (any_check);
   }
 
+  g_object_unref (store);
   g_object_ref_sink (full_view);
   gtk_window_destroy (GTK_WINDOW (win));
   g_clear_object (&full_view);
 }
 
-/* Test: save_core_labels in BzFullView preserves noncore_label_names
- * arary and per-app noncore assignments when writing new core labels. */
+/* Test: saving a new core label in BzFullView leaves the per-category
+ * custom-label names and assignments untouched. */
 static void
 test_save_preserves_noncore_label_names (void)
 {
-  BzFullView   *full_view;
-  BzEntryGroup *group;
-  GtkWidget    *btn_install;
-  GtkWidget    *win;
+  BzFullView         *full_view;
+  BzEntryGroup       *group;
+  CzCustomLabelStore *store;
+  CzCustomLabelStore *fresh;
+  GPtrArray          *names;
+  GtkWidget          *btn_install;
+  GtkWidget          *win;
+  guint               i;
+  gboolean            has_mytag = FALSE;
+  gboolean            has_othertag = FALSE;
 
-  /* Seed: label names MyTag/OtherTag + per-app noncore assignment */
+  wipe_store ();
+  g_application_set_default (NULL);
+  setup_test_state ();
+  /* Seed: core New + per-category (trending) names/assignment */
   seed_core_labels (
       (const char *[]) { "org.test.App1", NULL },
       (const char *[]) { "New", NULL }, 1);
-  seed_label_name ("MyTag");
-  seed_label_name ("OtherTag");
-  seed_noncore_assignment ("org.test.App1", "MyTag");
+  seed_category_label_name ("trending", "MyTag");
+  seed_category_label_name ("trending", "OtherTag");
+  seed_custom_assignment ("org.test.App1", "trending", "MyTag");
 
   full_view = g_object_new (BZ_TYPE_FULL_VIEW, NULL);
   g_assert_nonnull (full_view);
   win = host_full_view (full_view);
+
+  store = open_facade ();
+  bz_full_view_set_custom_label_store (full_view, store);
 
   group = make_entry_group ("org.test.App1");
   bz_full_view_set_entry_group (full_view, group);
@@ -1683,18 +1785,51 @@ test_save_preserves_noncore_label_names (void)
     process_events ();
   }
 
-  /* Verify: label names preserved and per-app noncore assignment intact */
+  /* Verify: per-category name list preserved and assignment intact */
   g_test_message ("DIAG:save-preserves-names"
-                  " | has_MyTag=%d | expected=1"
-                  " | has_OtherTag=%d | expected=1"
-                  " | app1_has_MyTag=%d | expected=1",
-                  read_has_label_name ("MyTag"),
-                  read_has_label_name ("OtherTag"),
-                  read_has_noncore ("org.test.App1", "MyTag"));
-  g_assert_true (read_has_label_name ("MyTag"));
-  g_assert_true (read_has_label_name ("OtherTag"));
-  g_assert_true (read_has_noncore ("org.test.App1", "MyTag"));
+                  " | app1_label=%s | expected=MyTag",
+                  cz_custom_label_store_get_app_custom_label (
+                      store, "org.test.App1"));
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_label (
+                       store, "org.test.App1"), ==, "MyTag");
 
+  names = cz_custom_label_store_get_category_label_names (store, "trending");
+  g_assert_nonnull (names);
+  for (i = 0; i < names->len; i++)
+    {
+      const char *name = (const char *) g_ptr_array_index (names, i);
+      if (g_strcmp0 (name, "MyTag") == 0)
+        has_mytag = TRUE;
+      if (g_strcmp0 (name, "OtherTag") == 0)
+        has_othertag = TRUE;
+    }
+  g_clear_pointer (&names, g_ptr_array_unref);
+  g_assert_true (has_mytag);
+  g_assert_true (has_othertag);
+
+  /* Re-read from disk through a FRESH store: the core save above must not
+   * have rewritten the custom tables underneath the in-memory cache. */
+  fresh = open_facade ();
+  g_assert_cmpstr (cz_custom_label_store_get_app_custom_label (
+                       fresh, "org.test.App1"), ==, "MyTag");
+  names = cz_custom_label_store_get_category_label_names (fresh, "trending");
+  g_assert_nonnull (names);
+  has_mytag = FALSE;
+  has_othertag = FALSE;
+  for (i = 0; i < names->len; i++)
+    {
+      const char *name = (const char *) g_ptr_array_index (names, i);
+      if (g_strcmp0 (name, "MyTag") == 0)
+        has_mytag = TRUE;
+      if (g_strcmp0 (name, "OtherTag") == 0)
+        has_othertag = TRUE;
+    }
+  g_clear_pointer (&names, g_ptr_array_unref);
+  g_assert_true (has_mytag);
+  g_assert_true (has_othertag);
+  g_object_unref (fresh);
+
+  g_object_unref (store);
   g_object_ref_sink (full_view);
   gtk_window_destroy (GTK_WINDOW (win));
   g_clear_object (&full_view);
@@ -1710,9 +1845,10 @@ test_noncore_pills_on_custom_page (void)
   GtkWidget     *stack;
   GtkWidget     *pill_label;
 
-  /* Seed: label name "TestTag" assigned to App1 */
-  seed_label_name ("TestTag");
-  seed_noncore_assignment ("org.test.App1", "TestTag");
+  /* Seed: label name "TestTag" in the default (trending) category,
+   * assigned to App1 (which belongs to trending). */
+  seed_category_label_name ("trending", "TestTag");
+  seed_custom_assignment ("org.test.App1", "trending", "TestTag");
 
   g_application_set_default (NULL);
   setup_test_state ();
@@ -1770,8 +1906,8 @@ test_filter_restore_on_back (void)
                          "org.test.App4", "org.test.App5", NULL },
       (const char *[]) { "Install",       "New",            "Forget it",
                          "4-Stars",       "3-Stars",        NULL }, 5);
-  seed_label_name ("TestTag");
-  seed_noncore_assignment ("org.test.App2", "TestTag");
+  seed_category_label_name ("game", "TestTag");
+  seed_custom_assignment ("org.test.App2", "game", "TestTag");
 
   g_application_set_default (NULL);
   setup_test_state ();

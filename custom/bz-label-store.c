@@ -183,6 +183,14 @@ init_schema (BzLabelStore *store,
       "  PRIMARY KEY (app_id, label)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS label_names ("
       "  name TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS app_custom_labels ("
+      "  app_id   TEXT PRIMARY KEY NOT NULL,"
+      "  category TEXT NOT NULL,"
+      "  label    TEXT NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS custom_label_names ("
+      "  category TEXT NOT NULL,"
+      "  name     TEXT NOT NULL,"
+      "  PRIMARY KEY (category, name)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS app_ratings ("
       "  app_id     TEXT PRIMARY KEY NOT NULL,"
       "  aesthetics TEXT NOT NULL DEFAULT '',"
@@ -192,7 +200,7 @@ init_schema (BzLabelStore *store,
 
   if (!exec_ok (store, schema, error))
     return FALSE;
-  return exec_ok (store, "PRAGMA user_version=2;", error);
+  return exec_ok (store, "PRAGMA user_version=3;", error);
 }
 
 static void
@@ -1671,6 +1679,297 @@ bz_label_store_count_noncore_label (BzLabelStore *store,
     return 0;
 
   sqlite3_bind_text (stmt, 1, label, -1, SQLITE_STATIC);
+  if (sqlite3_step (stmt) == SQLITE_ROW)
+    count = sqlite3_column_int (stmt, 0);
+  sqlite3_finalize (stmt);
+
+  return count;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Per-category custom-label API (mono-select, one label per app)       */
+/* ------------------------------------------------------------------ */
+
+gboolean
+bz_label_store_get_app_custom_label (BzLabelStore *store,
+                                     const char   *app_id,
+                                     char        **category_out,
+                                     char        **label_out)
+{
+  sqlite3_stmt *stmt   = NULL;
+  gboolean      found  = FALSE;
+  int           rc;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, FALSE);
+  g_return_val_if_fail (app_id != NULL, FALSE);
+
+  if (category_out != NULL)
+    *category_out = NULL;
+  if (label_out != NULL)
+    *label_out = NULL;
+
+  rc = sqlite3_prepare_v2 (store->db,
+                           "SELECT category, label FROM app_custom_labels WHERE app_id=?1;",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    return FALSE;
+
+  sqlite3_bind_text (stmt, 1, app_id, -1, SQLITE_STATIC);
+  if (sqlite3_step (stmt) == SQLITE_ROW)
+    {
+      found = TRUE;
+      if (category_out != NULL)
+        *category_out = g_strdup ((const char *) sqlite3_column_text (stmt, 0));
+      if (label_out != NULL)
+        *label_out = g_strdup ((const char *) sqlite3_column_text (stmt, 1));
+    }
+  sqlite3_finalize (stmt);
+
+  return found;
+}
+
+gboolean
+bz_label_store_set_app_custom_label (BzLabelStore *store,
+                                     const char   *app_id,
+                                     const char   *category,
+                                     const char   *label,
+                                     GError      **error)
+{
+  sqlite3_stmt *stmt;
+  int           rc;
+  gboolean      ok;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, FALSE);
+  g_return_val_if_fail (app_id != NULL, FALSE);
+
+  /* NULL or empty label means "Unlabeled" — clear the assignment. */
+  if (label == NULL || *label == '\0')
+    {
+      if (!tx_begin (store, error))
+        return FALSE;
+
+      rc = sqlite3_prepare_v2 (store->db,
+                               "DELETE FROM app_custom_labels WHERE app_id=?1;",
+                               -1, &stmt, NULL);
+      if (rc != SQLITE_OK)
+        {
+          set_error (store->db, rc, "prepare custom delete", error);
+          tx_abort (store);
+          return FALSE;
+        }
+
+      sqlite3_bind_text (stmt, 1, app_id, -1, SQLITE_STATIC);
+      ok = step_stmt (store, stmt, error);
+      sqlite3_finalize (stmt);
+
+      if (!ok)
+        {
+          tx_abort (store);
+          return FALSE;
+        }
+
+      return tx_finish (store, sqlite3_changes (store->db) > 0, error);
+    }
+
+  g_return_val_if_fail (category != NULL && *category != '\0', FALSE);
+
+  if (!tx_begin (store, error))
+    return FALSE;
+
+  rc = sqlite3_prepare_v2 (store->db,
+                           "INSERT INTO app_custom_labels(app_id,category,label) "
+                           "VALUES(?1,?2,?3) "
+                           "ON CONFLICT(app_id) DO UPDATE SET "
+                           "category=excluded.category, label=excluded.label;",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    {
+      set_error (store->db, rc, "prepare custom upsert", error);
+      tx_abort (store);
+      return FALSE;
+    }
+
+  sqlite3_bind_text (stmt, 1, app_id, -1, SQLITE_STATIC);
+  sqlite3_bind_text (stmt, 2, category, -1, SQLITE_STATIC);
+  sqlite3_bind_text (stmt, 3, label, -1, SQLITE_STATIC);
+  ok = step_stmt (store, stmt, error);
+  sqlite3_finalize (stmt);
+
+  if (!ok)
+    {
+      tx_abort (store);
+      return FALSE;
+    }
+
+  return tx_finish (store, TRUE, error);
+}
+
+char **
+bz_label_store_get_app_custom_label_app_ids (BzLabelStore *store)
+{
+  g_return_val_if_fail (store != NULL && store->db != NULL, NULL);
+
+  return collect_strv (store,
+                       "SELECT app_id FROM app_custom_labels ORDER BY app_id;",
+                       NULL);
+}
+
+char **
+bz_label_store_get_category_label_names (BzLabelStore *store,
+                                         const char   *category)
+{
+  g_return_val_if_fail (store != NULL && store->db != NULL, NULL);
+  g_return_val_if_fail (category != NULL, NULL);
+
+  return collect_strv (store,
+                       "SELECT name FROM custom_label_names WHERE category=?1 "
+                       "ORDER BY name;",
+                       category);
+}
+
+char **
+bz_label_store_get_categories_with_label_names (BzLabelStore *store)
+{
+  g_return_val_if_fail (store != NULL && store->db != NULL, NULL);
+
+  return collect_strv (store,
+                       "SELECT DISTINCT category FROM custom_label_names "
+                       "ORDER BY category;",
+                       NULL);
+}
+
+gboolean
+bz_label_store_add_category_label_name (BzLabelStore *store,
+                                        const char   *category,
+                                        const char   *name,
+                                        GError      **error)
+{
+  sqlite3_stmt *stmt;
+  int           rc;
+  gboolean      ok;
+  gint64        changed;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, FALSE);
+  g_return_val_if_fail (category != NULL && *category != '\0', FALSE);
+  g_return_val_if_fail (name != NULL && *name != '\0', FALSE);
+
+  if (!tx_begin (store, error))
+    return FALSE;
+
+  rc = sqlite3_prepare_v2 (store->db,
+                           "INSERT OR IGNORE INTO custom_label_names(category,name) "
+                           "VALUES(?1,?2);",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    {
+      set_error (store->db, rc, "prepare category name insert", error);
+      tx_abort (store);
+      return FALSE;
+    }
+
+  sqlite3_bind_text (stmt, 1, category, -1, SQLITE_STATIC);
+  sqlite3_bind_text (stmt, 2, name, -1, SQLITE_STATIC);
+  ok      = step_stmt (store, stmt, error);
+  changed = sqlite3_changes (store->db);
+  sqlite3_finalize (stmt);
+
+  if (!ok)
+    {
+      tx_abort (store);
+      return FALSE;
+    }
+
+  return tx_finish (store, changed > 0, error);
+}
+
+gboolean
+bz_label_store_remove_category_label_name (BzLabelStore *store,
+                                           const char   *category,
+                                           const char   *name,
+                                           GError      **error)
+{
+  sqlite3_stmt *stmt;
+  int           rc;
+  gboolean      ok;
+  gint64        changed = 0;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, FALSE);
+  g_return_val_if_fail (category != NULL && *category != '\0', FALSE);
+  g_return_val_if_fail (name != NULL && *name != '\0', FALSE);
+
+  if (!tx_begin (store, error))
+    return FALSE;
+
+  rc = sqlite3_prepare_v2 (store->db,
+                           "DELETE FROM custom_label_names WHERE category=?1 AND name=?2;",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    {
+      set_error (store->db, rc, "prepare category name delete", error);
+      tx_abort (store);
+      return FALSE;
+    }
+
+  sqlite3_bind_text (stmt, 1, category, -1, SQLITE_STATIC);
+  sqlite3_bind_text (stmt, 2, name, -1, SQLITE_STATIC);
+  ok = step_stmt (store, stmt, error);
+  changed += sqlite3_changes (store->db);
+  sqlite3_finalize (stmt);
+
+  if (!ok)
+    {
+      tx_abort (store);
+      return FALSE;
+    }
+
+  /* Cascade: drop assignments of this label within this category. */
+  rc = sqlite3_prepare_v2 (store->db,
+                           "DELETE FROM app_custom_labels WHERE category=?1 AND label=?2;",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    {
+      set_error (store->db, rc, "prepare custom cascade delete", error);
+      tx_abort (store);
+      return FALSE;
+    }
+
+  sqlite3_bind_text (stmt, 1, category, -1, SQLITE_STATIC);
+  sqlite3_bind_text (stmt, 2, name, -1, SQLITE_STATIC);
+  ok = step_stmt (store, stmt, error);
+  changed += sqlite3_changes (store->db);
+  sqlite3_finalize (stmt);
+
+  if (!ok)
+    {
+      tx_abort (store);
+      return FALSE;
+    }
+
+  return tx_finish (store, changed > 0, error);
+}
+
+guint
+bz_label_store_count_category_label_assignments (BzLabelStore *store,
+                                                 const char   *category,
+                                                 const char   *name)
+{
+  sqlite3_stmt *stmt = NULL;
+  int           rc;
+  guint         count = 0;
+
+  g_return_val_if_fail (store != NULL && store->db != NULL, 0);
+  g_return_val_if_fail (category != NULL, 0);
+  g_return_val_if_fail (name != NULL, 0);
+
+  rc = sqlite3_prepare_v2 (store->db,
+                           "SELECT COUNT(*) FROM app_custom_labels "
+                           "WHERE category=?1 AND label=?2;",
+                           -1, &stmt, NULL);
+  if (rc != SQLITE_OK)
+    return 0;
+
+  sqlite3_bind_text (stmt, 1, category, -1, SQLITE_STATIC);
+  sqlite3_bind_text (stmt, 2, name, -1, SQLITE_STATIC);
   if (sqlite3_step (stmt) == SQLITE_ROW)
     count = sqlite3_column_int (stmt, 0);
   sqlite3_finalize (stmt);

@@ -38,4 +38,9 @@ cz_custom_page_get_label_store (CzCustomPage *self);
 void
 cz_custom_page_rebuild_noncore_pills (CzCustomPage *self);
 
+/* Return the currently active category's internal name (owned by caller), or
+ * NULL when no category is selected. */
+char *
+cz_custom_page_get_active_category_name (CzCustomPage *self);
+
 G_END_DECLS

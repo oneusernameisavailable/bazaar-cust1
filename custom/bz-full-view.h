@@ -24,6 +24,7 @@
 
 #include "bz-entry-group.h"
 #include "bz-transaction-manager.h"
+#include "cz-custom-label-store.h"
 
 G_BEGIN_DECLS
 
@@ -54,11 +55,13 @@ bz_full_view_set_debounce (BzFullView *self,
 gboolean
 bz_full_view_get_debounce (BzFullView *self);
 
+/* Takes a strong reference on @store (released in dispose).  The store is
+ * the single source of truth for per-category custom-label names and
+ * per-app assignments; the full view writes to it and rebuilds its popover
+ * whenever it emits "changed".  Passing NULL releases the previous store
+ * without replacing it. */
 void
-bz_full_view_reload_custom_label_names (BzFullView *self);
-
-void
-bz_full_view_update_custom_label_names (BzFullView *self,
-                                        GPtrArray *names);
+bz_full_view_set_custom_label_store (BzFullView         *self,
+                                     CzCustomLabelStore *store);
 
 G_END_DECLS

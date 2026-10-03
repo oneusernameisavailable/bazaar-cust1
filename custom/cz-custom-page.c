@@ -57,9 +57,10 @@ struct _CzCustomPage
   GtkWidget *apps_list_view;
   GtkWidget *selected_tile;       /* category pill currently selected */
   GtkWidget *selected_core_tile;  /* core label pill currently selected */
+  GtkWidget *selected_noncore_tile; /* row 3: custom-label pill currently selected */
   GtkWidget *pill_box;            /* row 1: category pills */
   GtkWidget *custom_pill_box;     /* row 2: core label pills (New/Install/4-Stars/3-Stars/Forget it) */
-  GtkWidget *noncore_pill_box;     /* row 3: non-core label pills (Test1, Test2, ...) */
+  GtkWidget *noncore_pill_box;     /* row 3: per-category label pills (Unlabeled + active category's names) */
 
   GtkWidget    *scroll;            /* main scrolled window (populate_categories) */
   GtkRevealer  *to_top_revealer;   /* floating back-to-top button */
@@ -67,12 +68,16 @@ struct _CzCustomPage
   GListModel *all_groups;
   gulong      all_groups_changed_id;
 
+  CzCategoryPrimary *primary;     /* dedup engine for category tabs */
+  BzFlathubCategory *addons;       /* virtual tab (non-EOL addon groups) */
+  BzFlathubCategory *uncategorized; /* virtual catch-all tab (zero-category apps) */
+
   /* Snapshot of the combined filter taken when the user clicks an app tile,
    * restored on ::map when returning from the full-view back button. */
   gboolean   restore_on_map;
   char      *restore_category;    /* internal category name (cz-category) */
   char      *restore_core_label;  /* selected core-label pill text */
-  GPtrArray *restore_noncore;     /* selected non-core label names */
+  char      *restore_custom_label; /* selected custom-label pill text ("" = none selected) */
 };
 
 G_DEFINE_FINAL_TYPE (CzCustomPage, cz_custom_page, ADW_TYPE_BIN)
@@ -153,7 +158,9 @@ typedef struct
   CzCustomLabelStore *store;
   GHashTable         *id_set;
   char               *core_label;
-  GPtrArray          *noncore;  /* array of char*, or NULL */
+  char               *category;    /* active category name (cz-category), or NULL */
+  char               *custom_label; /* selected custom-label pill text,
+                                       NULL = none, CZ_UNLABELED_PILL_TEXT = Unlabeled */
 } CzFilterCtx;
 
 static void
@@ -165,14 +172,8 @@ cz_filter_ctx_free (gpointer data)
     return;
   g_hash_table_unref (ctx->id_set);
   g_free (ctx->core_label);
-  if (ctx->noncore != NULL)
-    {
-      guint i;
-
-      for (i = 0; i < ctx->noncore->len; i++)
-        g_free (g_ptr_array_index (ctx->noncore, i));
-      g_ptr_array_unref (ctx->noncore);
-    }
+  g_free (ctx->category);
+  g_free (ctx->custom_label);
   g_free (ctx);
 }
 
@@ -204,16 +205,27 @@ cz_label_filter_func (gpointer item, gpointer user_data)
         return FALSE;
     }
 
-  /* 3. Check non-core labels (AND: must have ALL selected) */
-  if (ctx->noncore != NULL && ctx->noncore->len > 0)
+  /* 3. Check per-category custom label (mono-select) */
+  if (ctx->custom_label != NULL)
     {
-      guint i;
+      const char *actual_cat   = cz_custom_label_store_get_app_custom_category (
+          ctx->store, app_id);
+      const char *actual_label = cz_custom_label_store_get_app_custom_label (
+          ctx->store, app_id);
 
-      for (i = 0; i < ctx->noncore->len; i++)
+      if (g_strcmp0 (ctx->custom_label, CZ_UNLABELED_PILL_TEXT) == 0)
         {
-          const char *label = (const char *) g_ptr_array_index (ctx->noncore, i);
-
-          if (!cz_custom_label_store_has_noncore_label (ctx->store, app_id, label))
+          /* Unlabeled: app has no custom label in the active category. */
+          if (actual_label != NULL &&
+              g_strcmp0 (actual_cat, ctx->category) == 0)
+            return FALSE;
+        }
+      else
+        {
+          /* Labeled: app's custom label must live in the active category
+           * and match the selected pill exactly. */
+          if (g_strcmp0 (actual_cat, ctx->category) != 0 ||
+              g_strcmp0 (actual_label, ctx->custom_label) != 0)
             return FALSE;
         }
     }
@@ -221,31 +233,24 @@ cz_label_filter_func (gpointer item, gpointer user_data)
   return TRUE;
 }
 
-/* Collect selected non-core label names into a new GPtrArray (caller frees) */
-static GPtrArray *
-collect_selected_noncore (CzCustomPage *self)
+/* Currently selected custom-label pill text, or NULL when none. */
+static const char *
+selected_custom_label (CzCustomPage *self)
 {
-  GPtrArray *arr;
   GtkWidget *child;
 
   if (self->noncore_pill_box == NULL)
     return NULL;
 
-  arr = g_ptr_array_new_with_free_func (g_free);
   child = gtk_widget_get_first_child (self->noncore_pill_box);
   while (child != NULL)
     {
       if (GTK_IS_BUTTON (child) &&
           gtk_widget_has_css_class (child, "selected"))
-        {
-          const char *label = gtk_button_get_label (GTK_BUTTON (child));
-
-          if (label != NULL)
-            g_ptr_array_add (arr, g_strdup (label));
-        }
+        return gtk_button_get_label (GTK_BUTTON (child));
       child = gtk_widget_get_next_sibling (child);
     }
-  return arr;
+  return NULL;
 }
 
 /* Free the current filter snapshot (fields may be re-snapshotted). */
@@ -254,7 +259,7 @@ clear_filter_snapshot (CzCustomPage *self)
 {
   g_clear_pointer (&self->restore_category, g_free);
   g_clear_pointer (&self->restore_core_label, g_free);
-  g_clear_pointer (&self->restore_noncore, g_ptr_array_unref);
+  g_clear_pointer (&self->restore_custom_label, g_free);
 }
 
 /* Record the combined filter exactly as it is right now (used right before
@@ -281,12 +286,16 @@ snapshot_filter (CzCustomPage *self)
     self->restore_core_label = g_strdup (
         gtk_button_get_label (GTK_BUTTON (self->selected_core_tile)));
 
-  self->restore_noncore = collect_selected_noncore (self);
+  {
+    const char *label = selected_custom_label (self);
 
-  trace ("snapshot_filter: category=%s core=%s noncore=%u",
+    self->restore_custom_label = g_strdup (label != NULL ? label : "");
+  }
+
+  trace ("snapshot_filter: category=%s core=%s custom=%s",
          self->restore_category ? self->restore_category : "(null)",
          self->restore_core_label ? self->restore_core_label : "(null)",
-         self->restore_noncore ? self->restore_noncore->len : 0);
+         self->restore_custom_label ? self->restore_custom_label : "(null)");
 
   self->restore_on_map = TRUE;
 }
@@ -349,12 +358,13 @@ restore_filter (CzCustomPage *self)
   BzFlathubCategory *category  = NULL;
   GtkWidget         *cat_pill  = NULL;
   GtkWidget         *core_pill = NULL;
+  GtkWidget         *custom_pill = NULL;
   GtkWidget         *child;
 
-  trace ("restore_filter: category=%s core=%s noncore=%u",
+  trace ("restore_filter: category=%s core=%s custom=%s",
          self->restore_category ? self->restore_category : "(null)",
          self->restore_core_label ? self->restore_core_label : "(null)",
-         self->restore_noncore ? self->restore_noncore->len : 0);
+         self->restore_custom_label ? self->restore_custom_label : "(null)");
 
   cat_pill = find_category_pill_by_name (self, self->restore_category);
   if (cat_pill == NULL)
@@ -395,17 +405,29 @@ restore_filter (CzCustomPage *self)
         }
     }
 
-  /* Non-core: re-mark each recorded label pill that still exists */
-  if (self->noncore_pill_box != NULL && self->restore_noncore != NULL)
+  /* Custom label: mono-select the restored pill if it still exists,
+   * otherwise fall back to the always-present "Unlabeled" pill (no custom
+   * constraint). */
+  if (self->noncore_pill_box != NULL)
     {
-      GtkWidget *npill;
+      for (child = gtk_widget_get_first_child (self->noncore_pill_box);
+           child != NULL; child = gtk_widget_get_next_sibling (child))
+        if (GTK_IS_BUTTON (child))
+          gtk_widget_remove_css_class (child, "selected");
+      self->selected_noncore_tile = NULL;
 
-      for (guint i = 0; i < self->restore_noncore->len; i++)
+      custom_pill = NULL;
+      if (self->restore_custom_label != NULL &&
+          *self->restore_custom_label != '\0')
+        custom_pill = find_pill_by_label (self->noncore_pill_box,
+                                          self->restore_custom_label);
+      if (custom_pill == NULL)
+        custom_pill = find_pill_by_label (self->noncore_pill_box,
+                                          CZ_UNLABELED_PILL_TEXT);
+      if (custom_pill != NULL)
         {
-          npill = find_pill_by_label (self->noncore_pill_box,
-              g_ptr_array_index (self->restore_noncore, i));
-          if (npill != NULL)
-            gtk_widget_add_css_class (npill, "selected");
+          gtk_widget_add_css_class (custom_pill, "selected");
+          self->selected_noncore_tile = custom_pill;
         }
     }
 
@@ -417,21 +439,29 @@ static void
 apply_filter (CzCustomPage     *self,
               BzFlathubCategory *category)
 {
-  GHashTable        *id_set    = NULL;
-  CzFilterCtx       *ctx       = NULL;
-  GtkFilter         *filter    = NULL;
-  GListModel        *all       = NULL;
-  GtkFilterListModel *filtered = NULL;
+  GHashTable        *id_set         = NULL;
+  CzFilterCtx       *ctx            = NULL;
+  GtkFilter         *filter         = NULL;
+  GListModel        *all            = NULL;
+  GListModel        *filtered_groups = NULL;
+  GtkFilterListModel *filtered      = NULL;
   const char        *cat_name;
 
   cat_name = category ? bz_flathub_category_get_name (category) : "NULL";
   trace ("apply_filter: category=%s, apps_list_view=%p",
          cat_name, self->apps_list_view);
 
-  /* Base model: always use entry groups (the filter checks
-   * BZ_IS_ENTRY_GROUP).  The id_set built from the category's
-   * applications list handles category membership. */
-  all = bz_state_info_get_all_entry_groups (self->state);
+  /* Base model: prefer the pre-filtered model so the hide-eol / foss /
+   * flathub / verified toggles (plus blocklists and malcontent) apply to
+   * this browse page too.  Fall back to the raw catalog while the filtered
+   * model is not yet available (standalone tests / early lifecycle).  The
+   * id_set built from the category's applications list handles category
+   * membership. */
+  filtered_groups = bz_state_info_get_filtered_entry_groups (self->state);
+  all = filtered_groups != NULL ? filtered_groups
+                                : bz_state_info_get_all_entry_groups (self->state);
+  trace ("apply_filter: base model=%p (filtered=%d)",
+         all, filtered_groups == all);
 
   if (all == NULL)
     {
@@ -439,15 +469,25 @@ apply_filter (CzCustomPage     *self,
       return;
     }
 
-  id_set = cz_category_build_id_set (category);
+  if (self->primary != NULL)
+    id_set = cz_category_primary_build_id_set (self->primary, category);
+  else
+    id_set = cz_category_build_id_set (category);
 
   ctx = g_new0 (CzFilterCtx, 1);
   ctx->store = self->label_store;
   ctx->id_set = id_set;
+  if (category != NULL)
+    ctx->category = g_strdup (bz_flathub_category_get_name (category));
   if (self->selected_core_tile != NULL)
     ctx->core_label = g_strdup (gtk_button_get_label (
         GTK_BUTTON (self->selected_core_tile)));
-  ctx->noncore = collect_selected_noncore (self);
+  {
+    const char *label = selected_custom_label (self);
+
+    if (label != NULL)
+      ctx->custom_label = g_strdup (label);
+  }
 
   filter = GTK_FILTER (gtk_custom_filter_new (
       (GtkCustomFilterFunc) cz_label_filter_func,
@@ -490,6 +530,9 @@ category_selected (CzCustomPage *self,
   self->selected_tile = pill;
   gtk_widget_set_visible (self->apps_list_view, TRUE);
 
+  /* Row 3 pills are per-category: rebuild them for the newly selected tab. */
+  cz_custom_page_rebuild_noncore_pills (self);
+
   apply_filter (self, category);
 }
 
@@ -498,16 +541,24 @@ noncore_label_selected (CzCustomPage *self,
                          GtkWidget    *pill)
 {
   BzFlathubCategory *category = NULL;
-  const char        *label;
+  GtkWidget         *child;
 
-  label = gtk_button_get_label (GTK_BUTTON (pill));
-  trace ("noncore_label_selected: label=%s", label);
+  g_return_if_fail (CZ_IS_CUSTOM_PAGE (self));
+  g_return_if_fail (self->noncore_pill_box != NULL);
 
-  /* Toggle */
-  if (gtk_widget_has_css_class (pill, "selected"))
-    gtk_widget_remove_css_class (pill, "selected");
-  else
-    gtk_widget_add_css_class (pill, "selected");
+  /* Mono-select: deselect all other custom-label pills */
+  child = gtk_widget_get_first_child (self->noncore_pill_box);
+  while (child != NULL)
+    {
+      if (GTK_IS_BUTTON (child) && child != pill)
+        gtk_widget_remove_css_class (child, "selected");
+      child = gtk_widget_get_next_sibling (child);
+    }
+  gtk_widget_add_css_class (pill, "selected");
+  self->selected_noncore_tile = pill;
+
+  trace ("noncore_label_selected: label=%s (mono-select)",
+         gtk_button_get_label (GTK_BUTTON (pill)));
 
   /* Re-filter with current selections */
   if (self->selected_tile != NULL)
@@ -521,6 +572,78 @@ noncore_label_selected (CzCustomPage *self,
 static void
 trigger_trending_click (CzCustomPage *self);
 
+/* Recompute the virtual "Uncategorized" tab membership from the live
+ * catalog (zero-category apps claimed by no collection). */
+static void
+cz_custom_page_refresh_uncategorized (CzCustomPage *self)
+{
+  BzFlathubState *flathub = NULL;
+  GListModel     *cats    = NULL;
+  GListModel     *all     = NULL;
+  char          **ids;
+
+  if (self->uncategorized == NULL)
+    return;
+
+  flathub = bz_state_info_get_flathub (self->state);
+  if (flathub != NULL)
+    cats = bz_flathub_state_get_categories (flathub);
+  all = bz_state_info_get_all_entry_groups (self->state);
+  if (cats == NULL || all == NULL)
+    return;
+
+  ids = cz_category_build_uncategorized (cats, all);
+  if (ids == NULL)
+    return;
+
+  {
+    GtkStringList *list = gtk_string_list_new (NULL);
+    guint          i;
+
+    for (i = 0; ids[i] != NULL; i++)
+      gtk_string_list_append (list, ids[i]);
+
+    bz_flathub_category_set_applications (self->uncategorized,
+                                          G_LIST_MODEL (list));
+    g_object_unref (list);
+  }
+
+  g_strfreev (ids);
+}
+
+/* Recompute the virtual "Addons" tab membership from the live catalog
+ * (non-EOL addon/extension groups). */
+static void
+cz_custom_page_refresh_addons (CzCustomPage *self)
+{
+  GListModel *all = NULL;
+  char      **ids;
+
+  if (self->addons == NULL)
+    return;
+
+  all = bz_state_info_get_all_entry_groups (self->state);
+  if (all == NULL)
+    return;
+
+  ids = cz_category_build_addons (all);
+  if (ids == NULL)
+    return;
+
+  {
+    GtkStringList *list = gtk_string_list_new (NULL);
+    guint          i;
+
+    for (i = 0; ids[i] != NULL; i++)
+      gtk_string_list_append (list, ids[i]);
+
+    bz_flathub_category_set_applications (self->addons, G_LIST_MODEL (list));
+    g_object_unref (list);
+  }
+
+  g_strfreev (ids);
+}
+
 static void
 on_entry_groups_changed (GListModel    *model,
                            guint          position,
@@ -533,6 +656,16 @@ on_entry_groups_changed (GListModel    *model,
 
   if (added == 0)
     return;
+
+  /* New apps on disk change category membership: drop the primary-category
+   * memo so the next filter rebuilds it from the fresh catalog. */
+  if (self->primary != NULL)
+    cz_category_primary_invalidate (self->primary);
+
+  /* Keep the virtual "Addons" and "Uncategorized" tabs in step with the
+   * catalog. */
+  cz_custom_page_refresh_addons (self);
+  cz_custom_page_refresh_uncategorized (self);
 
   if (self->selected_tile != NULL)
     {
@@ -548,6 +681,36 @@ on_entry_groups_changed (GListModel    *model,
     {
       trace ("on_entry_groups_changed: no selected tile, clicking trending");
       trigger_trending_click (self);
+    }
+}
+
+/* The filtered entry-group model now backs this page, so any preference
+ * that re-filters it (hide-eol, foss/flathub/verified) must re-apply the
+ * current tab list and keep the virtual "Uncategorized" tab in step. */
+static void
+on_state_filter_toggled (BzStateInfo *state,
+                         GParamSpec  *pspec,
+                         CzCustomPage *self)
+{
+  trace ("on_state_filter_toggled: pspec=%s",
+         pspec != NULL ? g_param_spec_get_name (pspec) : "NULL");
+
+  if (self->state != state)
+    return;
+
+  /* Raw catalog is still in use (no filtered model yet): nothing to do. */
+  if (bz_state_info_get_filtered_entry_groups (state) == NULL)
+    return;
+
+  cz_custom_page_refresh_addons (self);
+  cz_custom_page_refresh_uncategorized (self);
+
+  if (self->selected_tile != NULL)
+    {
+      BzFlathubCategory *category = g_object_get_data (
+          G_OBJECT (self->selected_tile), "cz-category");
+      if (category != NULL)
+        apply_filter (self, category);
     }
 }
 
@@ -788,6 +951,26 @@ populate_categories (CzCustomPage *self)
 
   trace ("populate_categories: building UI");
 
+  /* Virtual "Addons" tab: addon/extension groups that are not EOL.  Shown
+   * standalone so extensions are browsable; the pill lands just before the
+   * catch-all tab below. */
+  self->addons = bz_flathub_category_new ();
+  bz_flathub_category_set_name (self->addons, "addons");
+  cz_custom_page_refresh_addons (self);
+  g_list_store_append (G_LIST_STORE (categories), self->addons);
+
+  /* Virtual "Uncategorized" tab: apps with no appstream category and no
+   * collection membership anywhere.  Created once here, so the pill row and
+   * the dedup engine pick it up like any other tab. */
+  self->uncategorized = bz_flathub_category_new ();
+  bz_flathub_category_set_name (self->uncategorized, "uncategorized");
+  cz_custom_page_refresh_uncategorized (self);
+  g_list_store_append (G_LIST_STORE (categories), self->uncategorized);
+
+  /* One primary-category engine for all tabs: exactly one visible tab
+   * claims each app, so filters stay disjoint (rule A). */
+  self->primary = cz_category_primary_new (G_LIST_MODEL (categories));
+
   scroll = gtk_scrolled_window_new ();
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll),
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
@@ -847,6 +1030,10 @@ populate_categories (CzCustomPage *self)
         pill_label = bz_flathub_category_get_display_name (category);
         if (g_strcmp0 (bz_flathub_category_get_name (category), "graphics") == 0)
           pill_label = "Graph and Photo";
+        if (g_strcmp0 (bz_flathub_category_get_name (category), "addons") == 0)
+          pill_label = _("Addons");
+        if (g_strcmp0 (bz_flathub_category_get_name (category), "uncategorized") == 0)
+          pill_label = _("Uncategorized");
         if (pill_label == NULL)
           continue;
 
@@ -888,7 +1075,8 @@ populate_categories (CzCustomPage *self)
     gtk_box_append (GTK_BOX (box), self->custom_pill_box);
   }
 
-  /* Row 3: Non-core label pills (multi-select toggle, from store) */
+  /* Row 3: Custom-label pills for the active category (mono-select:
+   * always-present "Unlabeled" default + the category's label names). */
   {
     GtkLayoutManager *noncore_layout;
 
@@ -1152,6 +1340,18 @@ cz_custom_page_constructed (GObject *object)
       g_signal_connect_swapped (self->state, "notify::flathub",
                                 G_CALLBACK (on_flathub_loaded), self);
     }
+
+  /* This page reads the filtered entry-group model, so keep the current
+   * tab in step when any of the list preferences change the set of apps
+   * shown (hide-eol, show-only-foss, show-only-flathub, show-only-verified). */
+  g_signal_connect (self->state, "notify::hide-eol",
+                    G_CALLBACK (on_state_filter_toggled), self);
+  g_signal_connect (self->state, "notify::show-only-foss",
+                    G_CALLBACK (on_state_filter_toggled), self);
+  g_signal_connect (self->state, "notify::show-only-flathub",
+                    G_CALLBACK (on_state_filter_toggled), self);
+  g_signal_connect (self->state, "notify::show-only-verified",
+                    G_CALLBACK (on_state_filter_toggled), self);
   /* NOTE: setup_all_groups is called at the end of populate_categories,
    * AFTER the UI widgets (pill_box, apps_list_view) are created */
 
@@ -1164,15 +1364,59 @@ cz_custom_page_constructed (GObject *object)
                     G_CALLBACK (on_map), NULL);
 }
 
+/* Return the currently active category's internal name (owned by the
+ * category object, not by the caller), or NULL when no category is selected
+ * or the pill has no category data. */
+static const char *
+active_category_name (CzCustomPage *self)
+{
+  BzFlathubCategory *category;
+
+  if (self->selected_tile == NULL)
+    return NULL;
+
+  category = g_object_get_data (G_OBJECT (self->selected_tile), "cz-category");
+  if (category == NULL)
+    return NULL;
+
+  return bz_flathub_category_get_name (category);
+}
+
+/* Public, caller-owned copy of the active category name. */
+char *
+cz_custom_page_get_active_category_name (CzCustomPage *self)
+{
+  const char *name;
+
+  g_return_val_if_fail (CZ_IS_CUSTOM_PAGE (self), NULL);
+
+  name = active_category_name (self);
+  return g_strdup (name);
+}
+
+/* Rebuild Row 3 (custom-label pills) for the active category: an
+ * always-present "Unlabeled" pill plus one pill per label name defined in
+ * this category, mono-select.  A pill matching the current selection is
+ * re-selected when it survives the rebuild (same category refresh, or a
+ * same-named label in the newly shown category); otherwise the selection
+ * resets to "Unlabeled". */
 void
 cz_custom_page_rebuild_noncore_pills (CzCustomPage *self)
 {
-  GPtrArray *noncore_names;
+  const char *active_cat;
+  char       *selected_label;
+  GtkWidget  *unlabeled_pill;
+  GPtrArray  *names;
+  guint       n_names = 0;
 
   g_return_if_fail (CZ_IS_CUSTOM_PAGE (self));
 
   if (self->noncore_pill_box == NULL)
     return;
+
+  /* Copy the currently selected label: it borrows the selected pill's label
+   * string, which is freed when the pill is removed below. */
+  selected_label = g_strdup (selected_custom_label (self));
 
   /* Remove all existing pills */
   {
@@ -1182,41 +1426,62 @@ cz_custom_page_rebuild_noncore_pills (CzCustomPage *self)
       gtk_box_remove (GTK_BOX (self->noncore_pill_box), child);
   }
 
-  noncore_names = cz_custom_label_store_get_all_noncore_label_names (
-      self->label_store);
+  /* Always-present "Unlabeled" default pill */
+  unlabeled_pill = gtk_button_new_with_label (CZ_UNLABELED_PILL_TEXT);
+  gtk_widget_add_css_class (unlabeled_pill, "small-pill");
+  gtk_widget_add_css_class (unlabeled_pill, "noncore-pill");
+  g_signal_connect_swapped (unlabeled_pill, "clicked",
+                            G_CALLBACK (noncore_label_selected), self);
+  gtk_box_append (GTK_BOX (self->noncore_pill_box), unlabeled_pill);
 
-  if (noncore_names->len == 0)
+  active_cat = active_category_name (self);
+
+  if (active_cat != NULL)
     {
-      GtkWidget *pill = gtk_button_new_with_label ("Empty");
-      gtk_widget_add_css_class (pill, "small-pill");
-      gtk_widget_add_css_class (pill, "noncore-pill");
-      gtk_widget_set_sensitive (pill, FALSE);
-      gtk_box_append (GTK_BOX (self->noncore_pill_box), pill);
-    }
-  else
-    {
-      for (guint j = 0; j < noncore_names->len; j++)
+      names = cz_custom_label_store_get_category_label_names (
+          self->label_store, active_cat);
+      n_names = names != NULL ? names->len : 0;
+
+      for (guint j = 0; names != NULL && j < names->len; j++)
         {
-          const char *name = (const char *) g_ptr_array_index (noncore_names, j);
+          const char *name = (const char *) g_ptr_array_index (names, j);
+          GtkWidget  *pill;
 
-          /* Defensive: skip NULL or empty names */
-          if (name == NULL || *name == '\0')
+          if (name == NULL || *name == '\0' ||
+              g_strcmp0 (name, CZ_UNLABELED_PILL_TEXT) == 0)
             continue;
 
-          GtkWidget *pill = gtk_button_new_with_label (name);
-
-          /* Belt-and-suspenders: explicitly set label text */
-          gtk_button_set_label (GTK_BUTTON (pill), name);
-
+          pill = gtk_button_new_with_label (name);
           gtk_widget_add_css_class (pill, "small-pill");
           gtk_widget_add_css_class (pill, "noncore-pill");
           g_signal_connect_swapped (pill, "clicked",
                                     G_CALLBACK (noncore_label_selected), self);
           gtk_box_append (GTK_BOX (self->noncore_pill_box), pill);
         }
+
+      if (names != NULL)
+        g_ptr_array_unref (names);
     }
 
-  g_ptr_array_unref (noncore_names);
+  /* Restore selection: the previously selected name pill if it survived this
+   * rebuild and still belongs to the active category, else "Unlabeled". */
+  {
+    GtkWidget *keep = NULL;
+
+    if (selected_label != NULL && *selected_label != '\0')
+      keep = find_pill_by_label (self->noncore_pill_box, selected_label);
+
+    if (keep == NULL)
+      keep = unlabeled_pill;
+
+    gtk_widget_add_css_class (keep, "selected");
+    self->selected_noncore_tile = keep;
+  }
+
+  trace ("cz_custom_page_rebuild_noncore_pills: category=%s pills=%u",
+         active_cat ? active_cat : "(null)", n_names);
+
+  g_free (selected_label);
 }
 
 static void
@@ -1232,6 +1497,7 @@ cz_custom_page_finalize (GObject *object)
 
       g_signal_handlers_disconnect_by_func (self->state, on_flathub_loaded, self);
       g_signal_handlers_disconnect_by_func (self->state, on_all_entry_groups_loaded, self);
+      g_signal_handlers_disconnect_by_func (self->state, on_state_filter_toggled, self);
       if (flathub != NULL)
         g_signal_handlers_disconnect_by_func (flathub, on_categories_loaded, self);
     }
@@ -1263,6 +1529,10 @@ cz_custom_page_finalize (GObject *object)
       g_clear_object (&self->label_store);
     }
   g_free (self->label_store_path);
+
+  g_clear_pointer (&self->primary, cz_category_primary_unref);
+  g_clear_object (&self->addons);
+  g_clear_object (&self->uncategorized);
 
   G_OBJECT_CLASS (cz_custom_page_parent_class)->finalize (object);
 }
